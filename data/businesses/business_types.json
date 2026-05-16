@@ -1,0 +1,36 @@
+{
+  "businessTypes": [
+    {
+      "id": "farm",
+      "name": "Farm",
+      "description": "Produces food",
+      "maxEmployees": 10,
+      "productionType": "food",
+      "baseOutput": 500
+    },
+    {
+      "id": "factory",
+      "name": "Factory",
+      "description": "Produces goods",
+      "maxEmployees": 25,
+      "productionType": "goods",
+      "baseOutput": 1000
+    },
+    {
+      "id": "shop",
+      "name": "Shop",
+      "description": "Retail business",
+      "maxEmployees": 5,
+      "productionType": "trade",
+      "baseOutput": 300
+    },
+    {
+      "id": "clinic",
+      "name": "Clinic",
+      "description": "Healthcare facility",
+      "maxEmployees": 8,
+      "productionType": "healthcare",
+      "baseOutput": 0
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+# Godot
+.godot/
+*.godot
+export/
+export_presets.cfg
+
+# C#
+bin/
+obj/
+*.sln.user
+.vs/
+.vscode/
+*.dll
+*.pdb
+*.csproj.user
+
+# IDE
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+*.tmp
+
+# Saves
+saves/
+
+# Build output
+build/
+dist/

@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="GreenDistrict.Simulation/GreenDistrict.Simulation.csproj" />
+  <Project Path="GreenDistrict.Tests/GreenDistrict.Tests.csproj" />
+</Solution>

@@ -1,0 +1,39 @@
+{
+  "professions": [
+    {
+      "id": "farmer",
+      "name": "Farmer",
+      "description": "Agricultural worker",
+      "baseWage": 400,
+      "skillLevel": 1
+    },
+    {
+      "id": "worker",
+      "name": Factory Worker",
+      "description": "Manufacturing worker",
+      "baseWage": 500,
+      "skillLevel": 2
+    },
+    {
+      "id": "manager",
+      "name": "Manager",
+      "description": "Business manager",
+      "baseWage": 1000,
+      "skillLevel": 3
+    },
+    {
+      "id": "doctor",
+      "name": "Doctor",
+      "description": "Healthcare professional",
+      "baseWage": 1200,
+      "skillLevel": 3
+    },
+    {
+      "id": "trader",
+      "name": "Trader",
+      "description": "Merchant and trader",
+      "baseWage": 600,
+      "skillLevel": 2
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "balanceConfig": {
+    "version": "0.1.0",
+    "economySettings": {
+      "startingBudget": 10000,
+      "taxRate": 0.15,
+      "minSupportToRemainInPower": 20
+    },
+    "citizenSettings": {
+      "initialPopulation": 50,
+      "maxPopulation": 1000,
+      "foodConsumptionPerDay": 1.5
+    },
+    "needsWeights": {
+      "food": 0.25,
+      "housing": 0.25,
+      "safety": 0.2,
+      "healthcare": 0.15,
+      "entertainment": 0.15
+    }
+  }
+}
