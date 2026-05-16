@@ -1,5 +1,6 @@
 <Solution>
   <Project Path="GreenDistrict.Simulation/GreenDistrict.Simulation.csproj" />
+  <Project Path="../godot/GreenDistrict.Godot.csproj" />
   <Project Path="GreenDistrict.Cli/GreenDistrict.Cli.csproj" />
   <Project Path="GreenDistrict.Tests/GreenDistrict.Tests.csproj" />
 </Solution>

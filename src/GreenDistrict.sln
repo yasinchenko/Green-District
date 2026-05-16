@@ -9,6 +9,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GreenDistrict.Tests", "Gree
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GreenDistrict.Cli", "GreenDistrict.Cli\GreenDistrict.Cli.csproj", "{DF002E3A-E2DE-45D5-A268-A29C449D8187}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GreenDistrict.Godot", "..\godot\GreenDistrict.Godot.csproj", "{B80C9429-A447-4D0D-986B-C99F2879752B}"
+EndProject
 Global
   GlobalSection(SolutionConfigurationPlatforms) = preSolution
     Debug|Any CPU = Debug|Any CPU
@@ -27,5 +29,9 @@ Global
     {DF002E3A-E2DE-45D5-A268-A29C449D8187}.Debug|Any CPU.Build.0 = Debug|Any CPU
     {DF002E3A-E2DE-45D5-A268-A29C449D8187}.Release|Any CPU.ActiveCfg = Release|Any CPU
     {DF002E3A-E2DE-45D5-A268-A29C449D8187}.Release|Any CPU.Build.0 = Release|Any CPU
+    {B80C9429-A447-4D0D-986B-C99F2879752B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+    {B80C9429-A447-4D0D-986B-C99F2879752B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+    {B80C9429-A447-4D0D-986B-C99F2879752B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+    {B80C9429-A447-4D0D-986B-C99F2879752B}.Release|Any CPU.Build.0 = Release|Any CPU
   EndGlobalSection
 EndGlobal
