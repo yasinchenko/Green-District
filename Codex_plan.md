@@ -2,8 +2,8 @@
 
 ## Статус по циклам
 
-- Последний цикл: Фаза 5, события получили варианты решений `EventChoice` и применение последствий через `ResolveEventChoice`.
-- Проверка последнего цикла: `dotnet build src\GreenDistrict.sln` и `dotnet test src\GreenDistrict.sln --no-build` проходят, 84/84 тестов.
+- Последний цикл: Фаза 6, добавлены баланс-тесты и стабилизирован дефолтный экономический сценарий.
+- Проверка последнего цикла: `dotnet build src\GreenDistrict.sln` и `dotnet test src\GreenDistrict.sln --no-build` проходят, 91/91 тестов. Дополнительно проверен CLI-прогон `dotnet run --project src\GreenDistrict.Cli\GreenDistrict.Cli.csproj -- --years 1,10,50 --ticks-per-year 52 --demography-ticks-per-year 52 --seed 42 --json`.
 
 ## Фаза 1: Стабилизация Ядра - готово
 
@@ -112,15 +112,50 @@
 - `WorldState.ResolveEventChoice()` применяет последствия решения: бюджет, поддержку, показатели жителей района и снятие кризиса.
 - Кризисные события создаются с вариантами решения, включая бюджетное emergency response и мягкое public address.
 
-## Фаза 6: Save/Load, Сценарии, Баланс
+## Фаза 6: Save/Load, Сценарии, Баланс - готово
 
 Срок: 1 неделя.
 
-- [ ] Сериализация `WorldState`.
-- [ ] Загрузка сценариев из JSON: стартовое население, районы, бизнесы, бюджет.
-- [ ] Seed-based reproducibility: один seed должен давать одинаковый прогон.
-- [ ] CLI/headless runner для прогонов на 1, 10, 50 игровых лет.
-- [ ] Баланс-тесты: популяция не взрывается, бюджет не уходит в бесконечность, экономика не схлопывается без причины.
+- [x] Сериализация `WorldState`.
+- [x] Загрузка сценариев из JSON: стартовое население, районы, бизнесы, бюджет.
+- [x] Seed-based reproducibility: один seed должен давать одинаковый прогон.
+- [x] CLI/headless runner для прогонов на 1, 10, 50 игровых лет.
+- [x] Баланс-тесты: популяция не взрывается, бюджет не уходит в бесконечность, экономика не схлопывается без причины.
+
+Примечания по save/load:
+
+- Добавлен `WorldStateSerializer` с `SaveJson`, `LoadJson`, `SaveJsonFile`, `LoadJsonFile`.
+- Save/load сохраняет основные коллекции мира: citizens, households, housing units, districts, businesses, projects, events.
+- При загрузке восстанавливаются ID сущностей и связи: household members, housing occupancy, business employees, event choices.
+- `SimulationClock` поддерживает восстановление текущего тика через `SetCurrentTick`.
+
+Примечания по сценариям:
+
+- `WorldScenario` поддерживает `projects` со стартовыми проектами.
+- `ProjectScenario` умеет задавать `type`, `districtId`, duration/remaining ticks, статус завершения и эффекты проекта.
+- При указании `type` используются дефолты `GovernmentProject.CreateTyped()`, а явно заданные поля сценария переопределяют шаблон.
+- `data/scenarios/default_scenario.json` содержит стартовый проект `Riverside Park`.
+
+Примечания по reproducibility:
+
+- `WorldScenario` поддерживает `seed` и демографические параметры: `demographyTicksPerYear`, `birthRatePerPersonPerYear`, `baseDeathRatePerPersonPerYear`, `migrationRatePerPersonPerYear`.
+- `WorldState.ConfigureDemography()` пересоздаёт `DemographySystem` с `Random(seed)`.
+- Save/load сохраняет seed и демографические параметры.
+- Добавлен тест, где два мира с одинаковым seed дают одинаковые рождения за один и тот же прогон.
+
+Примечания по headless runner:
+
+- `SimulationRunner` теперь поддерживает `RunYears()` и `RunYearSeries()` поверх tick-based прогона.
+- `HeadlessRunSummary` возвращает итоговые метрики прогона: население, домохозяйства, бюджет, поддержку, удовлетворённость, безработицу, бизнесы, проекты, события и финальный tick.
+- `HeadlessRunSummary` также содержит активные/закрытые business names и `BusinessRunSummary` для диагностики балансных прогонов.
+- Добавлен CLI-проект `GreenDistrict.Cli`; базовый запуск: `dotnet run --project src\GreenDistrict.Cli\GreenDistrict.Cli.csproj -- --years 1,10,50`.
+- CLI поддерживает `--scenario`, `--seed`, `--ticks-per-year`, `--demography-ticks-per-year` и `--json`, что позволяет быстро делать как реальные, так и ускоренные балансные прогоны.
+
+Примечания по балансу:
+
+- Добавлен `BalanceTests`: дефолтный сценарий прогоняется на 1, 10 и 50 игровых лет при 52 ticks/year.
+- Тесты проверяют, что население не исчезает и не взрывается, бюджет остаётся конечным и в заданном диапазоне, все стартовые бизнесы остаются активными, удовлетворённость и безработица остаются в допустимых пределах.
+- Дефолтный сценарий стабилизирован: стартовые `MaxEmployees` приведены к фактической стартовой занятости, а продуктивность `Central Farm` повышена до уровня, при котором ферма не банкротится без внешней причины.
 
 ## Фаза 7: Godot UI MVP
 

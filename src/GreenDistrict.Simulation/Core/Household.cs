@@ -24,9 +24,14 @@ public class Household
     public bool HasHousing => HousingUnitId.HasValue || HousingCapacity > 0;
     public bool IsOvercrowded => HasHousing && HousingCapacity > 0 && MemberCount > HousingCapacity;
 
-    public Household(int? districtId = null, int? housingUnitId = null, int housingCapacity = 0, float rentPerTick = 0f)
+    public Household(int? districtId = null, int? housingUnitId = null, int housingCapacity = 0, float rentPerTick = 0f, int? id = null)
     {
-        Id = _nextId++;
+        Id = id ?? _nextId++;
+        if (id.HasValue && id.Value >= _nextId)
+        {
+            _nextId = id.Value + 1;
+        }
+
         DistrictId = districtId;
         HousingUnitId = housingUnitId;
         HousingCapacity = Math.Max(0, housingCapacity);

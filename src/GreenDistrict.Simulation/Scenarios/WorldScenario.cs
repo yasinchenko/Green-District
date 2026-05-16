@@ -11,11 +11,17 @@ public class WorldScenario
     public float BusinessTaxRate { get; set; } = 0.10f;
     public float BaseOperatingExpensePerTick { get; set; }
     public float ProjectOperatingExpensePerTick { get; set; }
+    public int Seed { get; set; }
+    public int DemographyTicksPerYear { get; set; } = 1440 * 365;
+    public float BirthRatePerPersonPerYear { get; set; } = 0.02f;
+    public float BaseDeathRatePerPersonPerYear { get; set; } = 0.01f;
+    public float MigrationRatePerPersonPerYear { get; set; } = 0.005f;
     public List<DistrictScenario> Districts { get; set; } = new();
     public List<BusinessScenario> Businesses { get; set; } = new();
     public List<HousingUnitScenario> HousingUnits { get; set; } = new();
     public List<CitizenScenario> Citizens { get; set; } = new();
     public List<HouseholdScenario> Households { get; set; } = new();
+    public List<ProjectScenario> Projects { get; set; } = new();
 }
 
 public class DistrictScenario
@@ -76,4 +82,27 @@ public class HouseholdScenario
     public int HousingCapacity { get; set; }
     public float RentPerTick { get; set; }
     public List<string> MemberNames { get; set; } = new();
+}
+
+public class ProjectScenario
+{
+    public int? Id { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public string Type { get; set; } = "Custom";
+    public float? Cost { get; set; }
+    public int? DurationTicks { get; set; }
+    public int? RemainingTicks { get; set; }
+    public float Benefit { get; set; }
+    public int? DistrictId { get; set; }
+    public float? FoodSatisfactionEffect { get; set; }
+    public float? HousingSatisfactionEffect { get; set; }
+    public float? SafetySatisfactionEffect { get; set; }
+    public float? HealthcareSatisfactionEffect { get; set; }
+    public float? EntertainmentSatisfactionEffect { get; set; }
+    public float? SupportEffect { get; set; }
+    public int? HousingUnitsToCreate { get; set; }
+    public int? HousingUnitCapacity { get; set; }
+    public float? HousingUnitRentPerTick { get; set; }
+    public bool Completed { get; set; }
+    public long StartTick { get; set; } = -1;
 }

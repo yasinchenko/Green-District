@@ -40,6 +40,7 @@ public static class WorldScenarioLoader
             BusinessTaxRate = 0.10f,
             BaseOperatingExpensePerTick = 25f,
             ProjectOperatingExpensePerTick = 5f,
+            Seed = 0,
             Districts =
             {
                 new DistrictScenario { Id = 1, Name = "Central" },
@@ -52,11 +53,11 @@ public static class WorldScenarioLoader
                     Id = 1,
                     Name = "Central Farm",
                     Type = "farm",
-                    MaxEmployees = 4,
+                    MaxEmployees = 2,
                     DistrictId = 1,
                     WagePerEmployee = 400f,
                     ProductionType = "food",
-                    BaseOutput = 500f,
+                    BaseOutput = 2500f,
                     UnitPrice = 2f,
                     DemandMultiplier = 0.85f,
                     Revenue = 5000f
@@ -66,7 +67,7 @@ public static class WorldScenarioLoader
                     Id = 2,
                     Name = "Riverside Shop",
                     Type = "shop",
-                    MaxEmployees = 3,
+                    MaxEmployees = 1,
                     DistrictId = 2,
                     WagePerEmployee = 500f,
                     ProductionType = "trade",
@@ -106,6 +107,18 @@ public static class WorldScenarioLoader
                     HousingCapacity = 2,
                     RentPerTick = 25f,
                     MemberNames = { "Anna River" }
+                }
+            },
+            Projects =
+            {
+                new ProjectScenario
+                {
+                    Id = 1,
+                    Name = "Riverside Park",
+                    Type = "Park",
+                    DistrictId = 2,
+                    RemainingTicks = 25,
+                    StartTick = -1
                 }
             }
         };

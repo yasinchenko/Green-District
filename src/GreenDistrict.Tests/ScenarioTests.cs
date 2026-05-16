@@ -22,10 +22,12 @@ public class ScenarioTests
         Assert.Equal(4, world.Citizens.Count);
         Assert.Equal(2, world.Households.Count);
         Assert.Equal(3, world.HousingUnits.Count);
+        Assert.Single(world.Projects);
         Assert.Contains(world.Businesses, b => b.Name == "Central Farm" && b.BaseOutput > 0f && b.UnitPrice > 0f);
         Assert.Contains(world.Citizens, c => c.Name == "Maria Green" && c.EmploymentStatus == EmploymentStatus.Employed);
         Assert.Contains(world.Households, h => h.MemberCount == 3 && h.HousingCapacity == 4);
         Assert.Contains(world.HousingUnits, h => h.Id == 1 && h.IsOccupied);
+        Assert.Contains(world.Projects, p => p.Type == ProjectType.Park && p.DistrictId == 2);
     }
 
     [Fact]
@@ -52,6 +54,9 @@ public class ScenarioTests
               ],
               "households": [
                 { "districtId": 10, "housingUnitId": 99, "housingCapacity": 2, "rentPerTick": 15, "memberNames": [ "Nina Stone", "Pavel Stone" ] }
+              ],
+              "projects": [
+                { "id": 30, "name": "Safety Office", "type": "Police", "districtId": 10, "durationTicks": 5, "remainingTicks": 3, "safetySatisfactionEffect": 20, "supportEffect": 4 }
               ]
             }
             """);
@@ -60,6 +65,7 @@ public class ScenarioTests
         var adult = world.GetCitizenByName("Nina Stone");
         var child = world.GetCitizenByName("Pavel Stone");
         var household = Assert.Single(world.Households);
+        var project = Assert.Single(world.Projects);
 
         Assert.NotNull(adult);
         Assert.NotNull(child);
@@ -76,6 +82,14 @@ public class ScenarioTests
         Assert.Equal(household.Id, world.HousingUnits[0].HouseholdId);
         Assert.Equal(99, household.HousingUnitId);
         Assert.Equal(100f, household.TotalIncome);
+        Assert.Equal(30, project.Id);
+        Assert.Equal(ProjectType.Police, project.Type);
+        Assert.Equal("Safety Office", project.Name);
+        Assert.Equal(10, project.DistrictId);
+        Assert.Equal(5, project.DurationTicks);
+        Assert.Equal(3, project.RemainingTicks);
+        Assert.Equal(20f, project.SafetySatisfactionEffect);
+        Assert.Equal(4f, project.SupportEffect);
     }
 
     [Fact]
@@ -93,6 +107,51 @@ public class ScenarioTests
         Assert.NotEmpty(world.Citizens);
         Assert.NotEmpty(world.Households);
         Assert.NotEmpty(world.HousingUnits);
+        Assert.NotEmpty(world.Projects);
+    }
+
+    [Fact]
+    public void WorldState_Initialize_Uses_Seed_For_Reproducible_Demography()
+    {
+        var scenario = new WorldScenario
+        {
+            Seed = 123,
+            DemographyTicksPerYear = 1,
+            BirthRatePerPersonPerYear = 1f,
+            BaseDeathRatePerPersonPerYear = 0f,
+            MigrationRatePerPersonPerYear = 0f,
+            Districts =
+            {
+                new DistrictScenario { Id = 1, Name = "North" }
+            },
+            Citizens =
+            {
+                new CitizenScenario { Name = "Maria North", Age = 25, Profession = "Worker", Gender = "Female", DistrictId = 1 },
+                new CitizenScenario { Name = "Elena North", Age = 28, Profession = "Worker", Gender = "Female", DistrictId = 1 }
+            }
+        };
+        var first = new WorldState();
+        var second = new WorldState();
+
+        first.Initialize(scenario);
+        second.Initialize(scenario);
+        first.Tick();
+        second.Tick();
+
+        var firstBabies = first.Citizens
+            .Where(c => c.Age == 0)
+            .Select(c => (c.Name, c.Gender, c.FamilyName))
+            .OrderBy(c => c.Name)
+            .ToList();
+        var secondBabies = second.Citizens
+            .Where(c => c.Age == 0)
+            .Select(c => (c.Name, c.Gender, c.FamilyName))
+            .OrderBy(c => c.Name)
+            .ToList();
+
+        Assert.Equal(123, first.SimulationSeed);
+        Assert.Equal(2, firstBabies.Count);
+        Assert.Equal(firstBabies, secondBabies);
     }
 
     private static string GetRepositoryRoot()

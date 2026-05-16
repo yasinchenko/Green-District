@@ -44,6 +44,11 @@ using GreenDistrict.Simulation.Scenarios;
     public float BaseOperatingExpensePerTick { get; set; } = 0f;
     public float ProjectOperatingExpensePerTick { get; set; } = 0f;
     public int ElectionIntervalTicks { get; set; } = 1440 * 365 * 4;
+    public int SimulationSeed { get; private set; }
+    public int DemographyTicksPerYear { get; private set; } = 1440 * 365;
+    public float BirthRatePerPersonPerYear { get; private set; } = 0.02f;
+    public float BaseDeathRatePerPersonPerYear { get; private set; } = 0.01f;
+    public float MigrationRatePerPersonPerYear { get; private set; } = 0.005f;
     
     public SimulationClock Clock => _clock;
     public UpdateManager UpdateManager => _updateManager;
@@ -63,8 +68,9 @@ using GreenDistrict.Simulation.Scenarios;
     public float LastElectionSupport { get; private set; }
     public int ElectionCount { get; private set; }
     
-    public WorldState()
+    public WorldState(int simulationSeed = 0)
     {
+        SimulationSeed = simulationSeed;
         _clock = new SimulationClock();
         _updateManager = new UpdateManager();
         _governmentSystem = new GovernmentSystem();
@@ -112,8 +118,7 @@ using GreenDistrict.Simulation.Scenarios;
         _updateManager.Register(UpdatePhase.CrisisProgression, UpdateCrises);
         _updateManager.Register(UpdatePhase.PoliticalSupportUpdate, UpdatePoliticalSupport);
         _updateManager.Register(UpdatePhase.ElectionCheck, CheckElection);
-        // Instantiate DemographySystem
-        _demographySystem = new DemographySystem();
+        _demographySystem = CreateDemographySystem();
         // Demography: run aging/births/deaths on TimeUpdate (annual within DemographySystem)
         _updateManager.Register(UpdatePhase.TimeUpdate, () => _demographySystem.UpdateTick(this));
     }
@@ -149,6 +154,12 @@ using GreenDistrict.Simulation.Scenarios;
         BusinessTaxRate = Math.Clamp(scenario.BusinessTaxRate, 0f, 1f);
         BaseOperatingExpensePerTick = Math.Max(0f, scenario.BaseOperatingExpensePerTick);
         ProjectOperatingExpensePerTick = Math.Max(0f, scenario.ProjectOperatingExpensePerTick);
+        ConfigureDemography(
+            scenario.Seed,
+            scenario.DemographyTicksPerYear,
+            scenario.BirthRatePerPersonPerYear,
+            scenario.BaseDeathRatePerPersonPerYear,
+            scenario.MigrationRatePerPersonPerYear);
 
         foreach (var districtSeed in scenario.Districts)
         {
@@ -228,6 +239,11 @@ using GreenDistrict.Simulation.Scenarios;
                 householdSeed.HousingUnitId,
                 householdSeed.HousingCapacity,
                 householdSeed.RentPerTick);
+        }
+
+        foreach (var projectSeed in scenario.Projects)
+        {
+            Projects.Add(CreateProjectFromScenario(projectSeed));
         }
 
         ReconcileScenarioJobs();
@@ -544,6 +560,51 @@ using GreenDistrict.Simulation.Scenarios;
         ElectionCount = 0;
     }
 
+    internal void RestoreRuntimeMetrics(
+        float lastUnemploymentRate,
+        float lastIncomeTaxCollected,
+        float lastBusinessTaxCollected,
+        float lastOperatingExpenses,
+        float lastNetBudgetChange,
+        long lastElectionTick,
+        float lastElectionSupport,
+        int electionCount)
+    {
+        LastUnemploymentRate = lastUnemploymentRate;
+        LastIncomeTaxCollected = lastIncomeTaxCollected;
+        LastBusinessTaxCollected = lastBusinessTaxCollected;
+        LastOperatingExpenses = lastOperatingExpenses;
+        LastNetBudgetChange = lastNetBudgetChange;
+        LastElectionTick = lastElectionTick;
+        LastElectionSupport = lastElectionSupport;
+        ElectionCount = Math.Max(0, electionCount);
+    }
+
+    public void ConfigureDemography(
+        int seed,
+        int ticksPerYear,
+        float birthRatePerPersonPerYear,
+        float baseDeathRatePerPersonPerYear,
+        float migrationRatePerPersonPerYear)
+    {
+        SimulationSeed = seed;
+        DemographyTicksPerYear = Math.Max(1, ticksPerYear);
+        BirthRatePerPersonPerYear = Math.Clamp(birthRatePerPersonPerYear, 0f, 1f);
+        BaseDeathRatePerPersonPerYear = Math.Clamp(baseDeathRatePerPersonPerYear, 0f, 1f);
+        MigrationRatePerPersonPerYear = Math.Clamp(migrationRatePerPersonPerYear, 0f, 1f);
+        _demographySystem = CreateDemographySystem();
+    }
+
+    private DemographySystem CreateDemographySystem()
+    {
+        return new DemographySystem(
+            DemographyTicksPerYear,
+            BirthRatePerPersonPerYear,
+            BaseDeathRatePerPersonPerYear,
+            MigrationRatePerPersonPerYear,
+            new Random(SimulationSeed));
+    }
+
     private void UpdatePoliticalSupport()
     {
         if (Districts.Count == 0)
@@ -726,6 +787,44 @@ using GreenDistrict.Simulation.Scenarios;
         return Enum.TryParse<BusinessStatus>(status, ignoreCase: true, out var parsed)
             ? parsed
             : BusinessStatus.Active;
+    }
+
+    private static GovernmentProject CreateProjectFromScenario(ProjectScenario projectSeed)
+    {
+        var type = ParseProjectType(projectSeed.Type);
+        var template = type == ProjectType.Custom
+            ? new GovernmentProject("Custom Project", 1000f, 10)
+            : GovernmentProject.CreateTyped(type, projectSeed.DistrictId);
+
+        var name = string.IsNullOrWhiteSpace(projectSeed.Name) ? template.Name : projectSeed.Name;
+        var cost = Math.Max(0f, projectSeed.Cost ?? template.Cost);
+        var durationTicks = Math.Max(1, projectSeed.DurationTicks ?? template.DurationTicks);
+        var project = new GovernmentProject(name, cost, durationTicks, projectSeed.Benefit, projectSeed.Id)
+        {
+            Type = type,
+            DistrictId = projectSeed.DistrictId,
+            RemainingTicks = Math.Clamp(projectSeed.RemainingTicks ?? template.RemainingTicks, 0, durationTicks),
+            FoodSatisfactionEffect = projectSeed.FoodSatisfactionEffect ?? template.FoodSatisfactionEffect,
+            HousingSatisfactionEffect = projectSeed.HousingSatisfactionEffect ?? template.HousingSatisfactionEffect,
+            SafetySatisfactionEffect = projectSeed.SafetySatisfactionEffect ?? template.SafetySatisfactionEffect,
+            HealthcareSatisfactionEffect = projectSeed.HealthcareSatisfactionEffect ?? template.HealthcareSatisfactionEffect,
+            EntertainmentSatisfactionEffect = projectSeed.EntertainmentSatisfactionEffect ?? template.EntertainmentSatisfactionEffect,
+            SupportEffect = projectSeed.SupportEffect ?? template.SupportEffect,
+            HousingUnitsToCreate = Math.Max(0, projectSeed.HousingUnitsToCreate ?? template.HousingUnitsToCreate),
+            HousingUnitCapacity = Math.Max(0, projectSeed.HousingUnitCapacity ?? template.HousingUnitCapacity),
+            HousingUnitRentPerTick = Math.Max(0f, projectSeed.HousingUnitRentPerTick ?? template.HousingUnitRentPerTick),
+            Completed = projectSeed.Completed,
+            StartTick = projectSeed.StartTick
+        };
+
+        return project;
+    }
+
+    private static ProjectType ParseProjectType(string? type)
+    {
+        return Enum.TryParse<ProjectType>(type, ignoreCase: true, out var parsed)
+            ? parsed
+            : ProjectType.Custom;
     }
 }
 

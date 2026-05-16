@@ -72,9 +72,14 @@ public class Citizen
     public float HealthcareSatisfaction { get; set; }
     public float EntertainmentSatisfaction { get; set; }
 
-    public Citizen(string name, int age, string profession, Gender gender = Gender.Female)
+    public Citizen(string name, int age, string profession, Gender gender = Gender.Female, int? id = null)
     {
-        Id = _nextId++;
+        Id = id ?? _nextId++;
+        if (id.HasValue && id.Value >= _nextId)
+        {
+            _nextId = id.Value + 1;
+        }
+
         Name = name;
         _age = Math.Max(0, age);
         Profession = profession;

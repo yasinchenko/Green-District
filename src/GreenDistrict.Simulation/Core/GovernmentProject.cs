@@ -25,9 +25,14 @@ public class GovernmentProject
     public bool Completed { get; set; }
     public long StartTick { get; set; }
 
-    public GovernmentProject(string name, float cost, int durationTicks, float benefit = 0f)
+    public GovernmentProject(string name, float cost, int durationTicks, float benefit = 0f, int? id = null)
     {
-        Id = _nextId++;
+        Id = id ?? _nextId++;
+        if (id.HasValue && id.Value >= _nextId)
+        {
+            _nextId = id.Value + 1;
+        }
+
         Name = name;
         Cost = cost;
         DurationTicks = durationTicks;

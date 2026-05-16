@@ -19,9 +19,14 @@ public class GameEvent
     public List<EventChoice> Choices { get; } = new();
     public bool HasChoices => Choices.Count > 0;
 
-    public GameEvent(string title, string description, EventType type)
+    public GameEvent(string title, string description, EventType type, int? id = null)
     {
-        Id = _nextId++;
+        Id = id ?? _nextId++;
+        if (id.HasValue && id.Value >= _nextId)
+        {
+            _nextId = id.Value + 1;
+        }
+
         Title = title;
         Description = description;
         Type = type;

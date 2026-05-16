@@ -6,6 +6,7 @@
   "businessTaxRate": 0.10,
   "baseOperatingExpensePerTick": 25,
   "projectOperatingExpensePerTick": 5,
+  "seed": 0,
   "districts": [
     {
       "id": 1,
@@ -21,11 +22,11 @@
       "id": 1,
       "name": "Central Farm",
       "type": "farm",
-      "maxEmployees": 4,
+      "maxEmployees": 2,
       "districtId": 1,
       "wagePerEmployee": 400,
       "productionType": "food",
-      "baseOutput": 500,
+      "baseOutput": 2500,
       "unitPrice": 2,
       "demandMultiplier": 0.85,
       "revenue": 5000,
@@ -35,7 +36,7 @@
       "id": 2,
       "name": "Riverside Shop",
       "type": "shop",
-      "maxEmployees": 3,
+      "maxEmployees": 1,
       "districtId": 2,
       "wagePerEmployee": 500,
       "productionType": "trade",
@@ -119,6 +120,16 @@
       "memberNames": [
         "Anna River"
       ]
+    }
+  ],
+  "projects": [
+    {
+      "id": 1,
+      "name": "Riverside Park",
+      "type": "Park",
+      "districtId": 2,
+      "remainingTicks": 25,
+      "startTick": -1
     }
   ]
 }

@@ -43,6 +43,11 @@ public class SimulationClock
         _currentTick += Math.Max(0, count);
         return _currentTick;
     }
+
+    public void SetCurrentTick(long tick)
+    {
+        _currentTick = Math.Max(0, tick);
+    }
     
     /// <summary>
     /// Get formatted time string (HH:MM format)
