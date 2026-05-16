@@ -7,16 +7,29 @@ namespace GreenDistrict.Simulation.Core;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using GreenDistrict.Simulation.Government;
+using GreenDistrict.Simulation.Economy;
+using GreenDistrict.Simulation.Needs;
+using GreenDistrict.Simulation.World;
+using GreenDistrict.Simulation.Demography;
+using GreenDistrict.Simulation.Behavior;
 
-public class WorldState
+    public class WorldState
 {
     private SimulationClock _clock;
     private UpdateManager _updateManager;
+    private GovernmentSystem _governmentSystem;
+    private EconomySystem _economySystem;
+    private NeedsSystem _needsSystem;
+    private DistrictSystem _districtSystem;
+    private DemographySystem _demographySystem;
+    private BehaviorSystem _behaviorSystem;
     
     // Core collections
     public List<Citizen> Citizens { get; } = new();
     public List<District> Districts { get; } = new();
     public List<Business> Businesses { get; } = new();
+    public List<GovernmentProject> Projects { get; } = new();
     public List<GameEvent> Events { get; } = new();
     
     // Player state
@@ -26,11 +39,74 @@ public class WorldState
     
     public SimulationClock Clock => _clock;
     public UpdateManager UpdateManager => _updateManager;
+    public GovernmentSystem Government => _governmentSystem;
+    public EconomySystem Economy => _economySystem;
+    public NeedsSystem Needs => _needsSystem;
+    public DistrictSystem DistrictsSystem => _districtSystem;
+    public DemographySystem Demography => _demographySystem;
+    public BehaviorSystem Behavior => _behaviorSystem;
+    // Last computed metrics
+    public float LastUnemploymentRate { get; private set; }
     
     public WorldState()
     {
         _clock = new SimulationClock();
         _updateManager = new UpdateManager();
+        _governmentSystem = new GovernmentSystem();
+        _economySystem = new EconomySystem();
+        _needsSystem = new NeedsSystem();
+        _districtSystem = new DistrictSystem();
+
+        // Register needs update to CitizenNeedsUpdate phase
+        _updateManager.Register(UpdatePhase.CitizenNeedsUpdate, () => _needsSystem.UpdateTick(this));
+
+        // Instantiate behavior system and register before economy assign
+        _behaviorSystem = new BehaviorSystem();
+
+        // Register behavior, then economy/job and payroll processing to JobAndIncomeUpdate phase
+        _updateManager.Register(UpdatePhase.JobAndIncomeUpdate, () => {
+            _behaviorSystem.UpdateTick(this);
+            _economySystem.AssignJobs(this);
+            _economySystem.ProcessPayroll(this);
+        });
+
+        // Register government project tick to EventTriggerCheck phase
+        _updateManager.Register(UpdatePhase.EventTriggerCheck, () => _governmentSystem.TickProjects(this));
+
+        // Register district aggregates update to DistrictAggregates phase
+        _updateManager.Register(UpdatePhase.DistrictAggregates, () => _districtSystem.UpdateDistrictAggregates(this));
+
+        // EconomyUpdate: compute unemployment rate (no direct state mutation)
+        _updateManager.Register(UpdatePhase.EconomyUpdate, () => {
+            LastUnemploymentRate = _economySystem.GetUnemploymentRate(this);
+        });
+
+        // BusinessUpdate: ensure business employee counts reflect employee ID lists
+        _updateManager.Register(UpdatePhase.BusinessUpdate, () => {
+            foreach (var b in Businesses)
+            {
+                b.EmployeeCount = b.EmployeeIds.Count;
+            }
+        });
+
+        // CrisisProgression: small, bounded support penalty per active crisis event
+        _updateManager.Register(UpdatePhase.CrisisProgression, () => {
+            var crises = Events.Count(e => e.Type == EventType.Crisis);
+            if (crises > 0)
+            {
+                SupportRating = Math.Clamp(SupportRating - crises * 0.05f, 0f, 100f);
+            }
+        });
+
+        // PoliticalSupportUpdate: nudge support towards average satisfaction
+        _updateManager.Register(UpdatePhase.PoliticalSupportUpdate, () => {
+            var avg = GetAverageSatisfaction();
+            SupportRating = Math.Clamp(SupportRating + (avg - SupportRating) * 0.01f, 0f, 100f);
+        });
+        // Instantiate DemographySystem
+        _demographySystem = new DemographySystem();
+        // Demography: run aging/births/deaths on TimeUpdate (annual within DemographySystem)
+        _updateManager.Register(UpdatePhase.TimeUpdate, () => _demographySystem.UpdateTick(this));
     }
     
     /// <summary>
@@ -122,6 +198,10 @@ public class Citizen
     public float Satisfaction { get; set; } = 50f; // 0-100%
     public float Mood { get; set; } = 50f; // 0-100%
     public float Health { get; set; } = 100f; // 0-100%
+    public bool IsRetired { get; set; } = false;
+    
+    public Gender Gender { get; set; }
+    public int? HouseholdId { get; set; }
     
     // Needs satisfaction (0-100%)
     public float FoodSatisfaction { get; set; }
@@ -130,12 +210,13 @@ public class Citizen
     public float HealthcareSatisfaction { get; set; }
     public float EntertainmentSatisfaction { get; set; }
     
-    public Citizen(string name, int age, string profession)
+    public Citizen(string name, int age, string profession, Gender gender = Gender.Female)
     {
         Id = _nextId++;
         Name = name;
         Age = age;
         Profession = profession;
+        Gender = gender;
     }
     
     /// <summary>
@@ -241,4 +322,11 @@ public enum EventType
     Economic,
     Social,
     Political
+}
+
+public enum Gender
+{
+    Male,
+    Female,
+    Other
 }
