@@ -21,7 +21,7 @@ public class NeedsTests
         };
         world.Citizens.Add(citizen);
 
-        var needs = new NeedsSystem(foodDecayPerTick: 5f);
+        var needs = new NeedsSystem(foodDecayPerTick: 5f, noHousingPenaltyPerTick: 0f, stableHousingRecoveryPerTick: 0f);
         needs.UpdateTick(world);
 
         Assert.Equal(95f, citizen.FoodSatisfaction);
@@ -43,7 +43,7 @@ public class NeedsTests
         };
         world.Citizens.Add(citizen);
 
-        var needs = new NeedsSystem(foodDecayPerTick: 0f, housingDecayPerTick: 0f, safetyDecayPerTick: 0f, healthcareDecayPerTick: 0f, entertainmentDecayPerTick: 0f);
+        var needs = new NeedsSystem(foodDecayPerTick: 0f, housingDecayPerTick: 0f, safetyDecayPerTick: 0f, healthcareDecayPerTick: 0f, entertainmentDecayPerTick: 0f, noHousingPenaltyPerTick: 0f);
         needs.UpdateTick(world);
 
         // Average of (80,60,40,20,0) = 40
@@ -63,10 +63,82 @@ public class NeedsTests
 
         world.Citizens.Add(citizen);
 
-        var needs = new NeedsSystem(foodDecayPerTick: 0f);
+        var needs = new NeedsSystem(foodDecayPerTick: 0f, noHousingPenaltyPerTick: 0f, stableHousingRecoveryPerTick: 0f);
         needs.UpdateTick(world);
 
         // UpdateMood reduces health by 1 when FoodSatisfaction < 30
         Assert.True(citizen.Health < 100f);
+    }
+
+    [Fact]
+    public void HousingSatisfaction_Drops_Faster_Without_Housing()
+    {
+        var world = new WorldState();
+        var citizen = new Citizen("No Home", 30, "Worker")
+        {
+            HousingSatisfaction = 80f
+        };
+        world.Citizens.Add(citizen);
+
+        var needs = new NeedsSystem(
+            foodDecayPerTick: 0f,
+            housingDecayPerTick: 1f,
+            safetyDecayPerTick: 0f,
+            healthcareDecayPerTick: 0f,
+            entertainmentDecayPerTick: 0f,
+            noHousingPenaltyPerTick: 4f,
+            stableHousingRecoveryPerTick: 0f);
+
+        needs.UpdateTick(world);
+
+        Assert.Equal(75f, citizen.HousingSatisfaction);
+    }
+
+    [Fact]
+    public void HousingSatisfaction_Reflects_Overcrowding_And_Rent_Burden()
+    {
+        var world = new WorldState();
+        var adult = new Citizen("Adult", 30, "Worker") { Income = 10f, HousingSatisfaction = 80f };
+        var child = new Citizen("Child", 8, "Child") { HousingSatisfaction = 80f };
+        world.Citizens.Add(adult);
+        world.Citizens.Add(child);
+        var household = world.CreateHousehold(1, new[] { adult, child }, housingUnitId: 10, housingCapacity: 1, rentPerTick: 10f);
+
+        var needs = new NeedsSystem(
+            foodDecayPerTick: 0f,
+            housingDecayPerTick: 1f,
+            safetyDecayPerTick: 0f,
+            healthcareDecayPerTick: 0f,
+            entertainmentDecayPerTick: 0f,
+            overcrowdingPenaltyPerExtraPersonPerTick: 3f,
+            highRentBurdenPenaltyPerTick: 2f,
+            stableHousingRecoveryPerTick: 0f);
+
+        needs.UpdateTick(world);
+
+        Assert.True(household.IsOvercrowded);
+        Assert.Equal(72f, adult.HousingSatisfaction);
+        Assert.Equal(72f, child.HousingSatisfaction);
+    }
+
+    [Fact]
+    public void HousingSatisfaction_Recovers_Slightly_With_Stable_Housing()
+    {
+        var world = new WorldState();
+        var adult = new Citizen("Stable", 30, "Worker") { Income = 100f, HousingSatisfaction = 60f };
+        world.Citizens.Add(adult);
+        world.CreateHousehold(1, new[] { adult }, housingUnitId: 1, housingCapacity: 2, rentPerTick: 10f);
+
+        var needs = new NeedsSystem(
+            foodDecayPerTick: 0f,
+            housingDecayPerTick: 1f,
+            safetyDecayPerTick: 0f,
+            healthcareDecayPerTick: 0f,
+            entertainmentDecayPerTick: 0f,
+            stableHousingRecoveryPerTick: 3f);
+
+        needs.UpdateTick(world);
+
+        Assert.Equal(62f, adult.HousingSatisfaction);
     }
 }

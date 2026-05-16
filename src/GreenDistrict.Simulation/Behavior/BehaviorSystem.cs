@@ -1,6 +1,7 @@
 using System;
 using System.Linq;
 using GreenDistrict.Simulation.Core;
+using GreenDistrict.Simulation.Economy;
 
 namespace GreenDistrict.Simulation.Behavior;
 
@@ -27,8 +28,8 @@ public class BehaviorSystem
             // Retirement
             if (!c.IsRetired && c.Age >= RetirementAge)
             {
-                c.IsRetired = true;
-                c.Job = null;
+                EconomySystem.ReleaseCitizenFromJob(world, c);
+                c.Retire();
                 c.Profession = "Retired";
                 world.Events.Add(new GameEvent($"Retirement: {c.Name}", $"{c.Name} retired at age {c.Age}.", EventType.Social) { CreatedAtTick = world.Clock.CurrentTick });
                 continue;
@@ -37,14 +38,7 @@ public class BehaviorSystem
             // Voluntary quit due to low satisfaction
             if (!string.IsNullOrEmpty(c.Job) && c.Satisfaction < QuitSatisfactionThreshold)
             {
-                // remove from business
-                var biz = world.Businesses.FirstOrDefault(b => b.Name == c.Job);
-                if (biz != null)
-                {
-                    biz.EmployeeIds.Remove(c.Id);
-                    biz.EmployeeCount = biz.EmployeeIds.Count;
-                }
-                c.Job = null;
+                EconomySystem.ReleaseCitizenFromJob(world, c);
                 world.Events.Add(new GameEvent($"Quit: {c.Name}", $"{c.Name} quit their job due to low satisfaction.", EventType.Social) { CreatedAtTick = world.Clock.CurrentTick });
             }
         }

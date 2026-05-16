@@ -1,0 +1,27 @@
+{
+  "language": "ru",
+  "strings": {
+    "ui.language": "Язык",
+    "ui.language.english": "Английский",
+    "ui.language.russian": "Русский",
+    "ui.budget": "Бюджет",
+    "ui.population": "Население",
+    "ui.support": "Поддержка",
+    "ui.districts": "Районы",
+    "ui.events": "События",
+    "ui.projects": "Проекты",
+    "ui.citizens": "Жители",
+    "event.birth.title": "Рождение",
+    "event.death.title": "Смерть",
+    "event.retirement.title": "Пенсия",
+    "event.quit.title": "Увольнение",
+    "status.life.child": "Ребёнок",
+    "status.life.student": "Учащийся",
+    "status.life.adult": "Взрослый",
+    "status.life.retired": "Пенсионер",
+    "status.employment.unemployed": "Безработный",
+    "status.employment.employed": "Работает",
+    "status.employment.retired": "Пенсионер",
+    "status.employment.student": "Учащийся"
+  }
+}

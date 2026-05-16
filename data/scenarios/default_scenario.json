@@ -1,0 +1,124 @@
+{
+  "budget": 10000,
+  "supportRating": 75,
+  "isInPower": true,
+  "incomeTaxRate": 0.15,
+  "businessTaxRate": 0.10,
+  "baseOperatingExpensePerTick": 25,
+  "projectOperatingExpensePerTick": 5,
+  "districts": [
+    {
+      "id": 1,
+      "name": "Central"
+    },
+    {
+      "id": 2,
+      "name": "Riverside"
+    }
+  ],
+  "businesses": [
+    {
+      "id": 1,
+      "name": "Central Farm",
+      "type": "farm",
+      "maxEmployees": 4,
+      "districtId": 1,
+      "wagePerEmployee": 400,
+      "productionType": "food",
+      "baseOutput": 500,
+      "unitPrice": 2,
+      "demandMultiplier": 0.85,
+      "revenue": 5000,
+      "expenses": 0
+    },
+    {
+      "id": 2,
+      "name": "Riverside Shop",
+      "type": "shop",
+      "maxEmployees": 3,
+      "districtId": 2,
+      "wagePerEmployee": 500,
+      "productionType": "trade",
+      "baseOutput": 300,
+      "unitPrice": 5,
+      "demandMultiplier": 0.9,
+      "revenue": 3500,
+      "expenses": 0
+    }
+  ],
+  "housingUnits": [
+    {
+      "id": 1,
+      "districtId": 1,
+      "capacity": 4,
+      "rentPerTick": 20
+    },
+    {
+      "id": 2,
+      "districtId": 2,
+      "capacity": 2,
+      "rentPerTick": 25
+    },
+    {
+      "id": 3,
+      "districtId": 2,
+      "capacity": 3,
+      "rentPerTick": 30
+    }
+  ],
+  "citizens": [
+    {
+      "name": "Maria Green",
+      "age": 29,
+      "profession": "Worker",
+      "gender": "Female",
+      "districtId": 1,
+      "job": "Central Farm"
+    },
+    {
+      "name": "Ivan Green",
+      "age": 31,
+      "profession": "Worker",
+      "gender": "Male",
+      "districtId": 1,
+      "job": "Central Farm"
+    },
+    {
+      "name": "Sofia Green",
+      "age": 7,
+      "profession": "Child",
+      "gender": "Female",
+      "districtId": 1
+    },
+    {
+      "name": "Anna River",
+      "age": 35,
+      "profession": "Trader",
+      "gender": "Female",
+      "districtId": 2,
+      "job": "Riverside Shop"
+    }
+  ],
+  "households": [
+    {
+      "districtId": 1,
+      "housingUnitId": 1,
+      "housingCapacity": 4,
+      "rentPerTick": 20,
+      "memberNames": [
+        "Maria Green",
+        "Ivan Green",
+        "Sofia Green"
+      ]
+    },
+    {
+      "districtId": 2,
+      "housingUnitId": 2,
+      "housingCapacity": 2,
+      "rentPerTick": 25,
+      "memberNames": [
+        "Anna River"
+      ]
+    }
+  ]
+}

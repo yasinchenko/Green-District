@@ -29,7 +29,7 @@ public enum UpdatePhase
 /// </summary>
 public class UpdateManager
 {
-    private Dictionary<UpdatePhase, Action> _updateHandlers = new();
+    private readonly Dictionary<UpdatePhase, List<Action>> _updateHandlers = new();
     
     /// <summary>
     /// Register a handler for a specific update phase.
@@ -39,7 +39,13 @@ public class UpdateManager
         if (handler == null)
             throw new ArgumentNullException(nameof(handler));
             
-        _updateHandlers[phase] = handler;
+        if (!_updateHandlers.TryGetValue(phase, out var handlers))
+        {
+            handlers = new List<Action>();
+            _updateHandlers[phase] = handlers;
+        }
+
+        handlers.Add(handler);
     }
     
     /// <summary>
@@ -55,16 +61,19 @@ public class UpdateManager
     /// </summary>
     public void ExecutePhase(UpdatePhase phase)
     {
-        if (_updateHandlers.TryGetValue(phase, out var handler))
+        if (_updateHandlers.TryGetValue(phase, out var handlers))
         {
-            try
+            foreach (var handler in handlers)
             {
-                handler.Invoke();
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error in {phase}: {ex.Message}");
-                throw;
+                try
+                {
+                    handler.Invoke();
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Error in {phase}: {ex.Message}");
+                    throw;
+                }
             }
         }
     }

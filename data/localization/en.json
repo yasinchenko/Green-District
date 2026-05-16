@@ -1,0 +1,27 @@
+{
+  "language": "en",
+  "strings": {
+    "ui.language": "Language",
+    "ui.language.english": "English",
+    "ui.language.russian": "Russian",
+    "ui.budget": "Budget",
+    "ui.population": "Population",
+    "ui.support": "Support",
+    "ui.districts": "Districts",
+    "ui.events": "Events",
+    "ui.projects": "Projects",
+    "ui.citizens": "Citizens",
+    "event.birth.title": "Birth",
+    "event.death.title": "Death",
+    "event.retirement.title": "Retirement",
+    "event.quit.title": "Quit",
+    "status.life.child": "Child",
+    "status.life.student": "Student",
+    "status.life.adult": "Adult",
+    "status.life.retired": "Retired",
+    "status.employment.unemployed": "Unemployed",
+    "status.employment.employed": "Employed",
+    "status.employment.retired": "Retired",
+    "status.employment.student": "Student"
+  }
+}

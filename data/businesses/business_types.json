@@ -6,7 +6,9 @@
       "description": "Produces food",
       "maxEmployees": 10,
       "productionType": "food",
-      "baseOutput": 500
+      "baseOutput": 500,
+      "unitPrice": 2,
+      "demandMultiplier": 0.85
     },
     {
       "id": "factory",
@@ -14,7 +16,9 @@
       "description": "Produces goods",
       "maxEmployees": 25,
       "productionType": "goods",
-      "baseOutput": 1000
+      "baseOutput": 1000,
+      "unitPrice": 3,
+      "demandMultiplier": 0.75
     },
     {
       "id": "shop",
@@ -22,7 +26,9 @@
       "description": "Retail business",
       "maxEmployees": 5,
       "productionType": "trade",
-      "baseOutput": 300
+      "baseOutput": 300,
+      "unitPrice": 5,
+      "demandMultiplier": 0.9
     },
     {
       "id": "clinic",
@@ -30,7 +36,9 @@
       "description": "Healthcare facility",
       "maxEmployees": 8,
       "productionType": "healthcare",
-      "baseOutput": 0
+      "baseOutput": 80,
+      "unitPrice": 4,
+      "demandMultiplier": 0.8
     }
   ]
 }

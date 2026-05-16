@@ -13,6 +13,7 @@ using GreenDistrict.Simulation.Needs;
 using GreenDistrict.Simulation.World;
 using GreenDistrict.Simulation.Demography;
 using GreenDistrict.Simulation.Behavior;
+using GreenDistrict.Simulation.Scenarios;
 
     public class WorldState
 {
@@ -27,6 +28,8 @@ using GreenDistrict.Simulation.Behavior;
     
     // Core collections
     public List<Citizen> Citizens { get; } = new();
+    public List<Household> Households { get; } = new();
+    public List<HousingUnit> HousingUnits { get; } = new();
     public List<District> Districts { get; } = new();
     public List<Business> Businesses { get; } = new();
     public List<GovernmentProject> Projects { get; } = new();
@@ -36,6 +39,10 @@ using GreenDistrict.Simulation.Behavior;
     public float Budget { get; set; } = 10000f;
     public float SupportRating { get; set; } = 75f; // 0-100%
     public bool IsInPower { get; set; } = true;
+    public float IncomeTaxRate { get; set; } = 0.15f;
+    public float BusinessTaxRate { get; set; } = 0.10f;
+    public float BaseOperatingExpensePerTick { get; set; } = 0f;
+    public float ProjectOperatingExpensePerTick { get; set; } = 0f;
     
     public SimulationClock Clock => _clock;
     public UpdateManager UpdateManager => _updateManager;
@@ -47,6 +54,10 @@ using GreenDistrict.Simulation.Behavior;
     public BehaviorSystem Behavior => _behaviorSystem;
     // Last computed metrics
     public float LastUnemploymentRate { get; private set; }
+    public float LastIncomeTaxCollected { get; set; }
+    public float LastBusinessTaxCollected { get; set; }
+    public float LastOperatingExpenses { get; set; }
+    public float LastNetBudgetChange { get; set; }
     
     public WorldState()
     {
@@ -67,7 +78,12 @@ using GreenDistrict.Simulation.Behavior;
         _updateManager.Register(UpdatePhase.JobAndIncomeUpdate, () => {
             _behaviorSystem.UpdateTick(this);
             _economySystem.AssignJobs(this);
+            _economySystem.ProcessProductionAndSales(this);
             _economySystem.ProcessPayroll(this);
+            _economySystem.ProcessBusinessTaxes(this);
+            _economySystem.UpdateBusinessViability(this);
+            _economySystem.ProcessGovernmentExpenses(this);
+            RecalculateHouseholds();
         });
 
         // Register government project tick to EventTriggerCheck phase
@@ -114,7 +130,117 @@ using GreenDistrict.Simulation.Behavior;
     /// </summary>
     public void Initialize()
     {
-        // Setup will happen through external data loaders
+        Initialize(WorldScenarioLoader.CreateDefault());
+    }
+
+    public void InitializeFromJson(string json)
+    {
+        Initialize(WorldScenarioLoader.LoadJson(json));
+    }
+
+    public void InitializeFromJsonFile(string path)
+    {
+        Initialize(WorldScenarioLoader.LoadJsonFile(path));
+    }
+
+    public void Initialize(WorldScenario scenario)
+    {
+        if (scenario == null) throw new ArgumentNullException(nameof(scenario));
+
+        ClearSimulationState();
+
+        Budget = scenario.Budget;
+        SupportRating = Math.Clamp(scenario.SupportRating, 0f, 100f);
+        IsInPower = scenario.IsInPower;
+        IncomeTaxRate = Math.Clamp(scenario.IncomeTaxRate, 0f, 1f);
+        BusinessTaxRate = Math.Clamp(scenario.BusinessTaxRate, 0f, 1f);
+        BaseOperatingExpensePerTick = Math.Max(0f, scenario.BaseOperatingExpensePerTick);
+        ProjectOperatingExpensePerTick = Math.Max(0f, scenario.ProjectOperatingExpensePerTick);
+
+        foreach (var districtSeed in scenario.Districts)
+        {
+            Districts.Add(new District(districtSeed.Name)
+            {
+                Id = districtSeed.Id
+            });
+        }
+
+        foreach (var businessSeed in scenario.Businesses)
+        {
+            Businesses.Add(new Business(businessSeed.Name, businessSeed.Type, businessSeed.MaxEmployees)
+            {
+                Id = businessSeed.Id,
+                DistrictId = businessSeed.DistrictId,
+                WagePerEmployee = businessSeed.WagePerEmployee,
+                ProductionType = businessSeed.ProductionType,
+                BaseOutput = businessSeed.BaseOutput,
+                UnitPrice = businessSeed.UnitPrice,
+                DemandMultiplier = businessSeed.DemandMultiplier,
+                Revenue = businessSeed.Revenue,
+                Expenses = businessSeed.Expenses,
+                Status = ParseBusinessStatus(businessSeed.Status)
+            });
+        }
+
+        foreach (var housingSeed in scenario.HousingUnits)
+        {
+            HousingUnits.Add(new HousingUnit(
+                housingSeed.Id,
+                housingSeed.DistrictId,
+                housingSeed.Capacity,
+                housingSeed.RentPerTick));
+        }
+
+        foreach (var citizenSeed in scenario.Citizens)
+        {
+            var citizen = new Citizen(
+                citizenSeed.Name,
+                citizenSeed.Age,
+                citizenSeed.Profession,
+                ParseGender(citizenSeed.Gender))
+            {
+                DistrictId = citizenSeed.DistrictId,
+                Income = citizenSeed.Income,
+                Satisfaction = Math.Clamp(citizenSeed.Satisfaction, 0f, 100f),
+                Mood = Math.Clamp(citizenSeed.Mood, 0f, 100f),
+                Health = Math.Clamp(citizenSeed.Health, 0f, 100f),
+                FoodSatisfaction = Math.Clamp(citizenSeed.FoodSatisfaction, 0f, 100f),
+                HousingSatisfaction = Math.Clamp(citizenSeed.HousingSatisfaction, 0f, 100f),
+                SafetySatisfaction = Math.Clamp(citizenSeed.SafetySatisfaction, 0f, 100f),
+                HealthcareSatisfaction = Math.Clamp(citizenSeed.HealthcareSatisfaction, 0f, 100f),
+                EntertainmentSatisfaction = Math.Clamp(citizenSeed.EntertainmentSatisfaction, 0f, 100f)
+            };
+
+            citizen.Job = citizenSeed.Job;
+            if (citizenSeed.IsRetired)
+            {
+                citizen.Retire();
+                citizen.Profession = "Retired";
+            }
+
+            Citizens.Add(citizen);
+        }
+
+        foreach (var householdSeed in scenario.Households)
+        {
+            var members = householdSeed.MemberNames
+                .Select(GetCitizenByName)
+                .Where(c => c != null)
+                .Cast<Citizen>()
+                .ToList();
+
+            CreateHousehold(
+                householdSeed.DistrictId,
+                members,
+                householdSeed.HousingUnitId,
+                householdSeed.HousingCapacity,
+                householdSeed.RentPerTick);
+        }
+
+        ReconcileScenarioJobs();
+        RecalculateHouseholds();
+        _districtSystem.UpdateDistrictAggregates(this);
+        LastUnemploymentRate = _economySystem.GetUnemploymentRate(this);
     }
     
     /// <summary>
@@ -133,6 +259,200 @@ using GreenDistrict.Simulation.Behavior;
     {
         return Citizens.FirstOrDefault(c => c.Id == id);
     }
+
+    public Citizen? GetCitizenByName(string name)
+    {
+        return Citizens.FirstOrDefault(c => string.Equals(c.Name, name, StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Get a household by ID.
+    /// </summary>
+    public Household? GetHousehold(int id)
+    {
+        return Households.FirstOrDefault(h => h.Id == id);
+    }
+
+    /// <summary>
+    /// Get a housing unit by ID.
+    /// </summary>
+    public HousingUnit? GetHousingUnit(int id)
+    {
+        return HousingUnits.FirstOrDefault(h => h.Id == id);
+    }
+
+    public HousingUnit AddHousingUnit(int id, int? districtId, int capacity, float rentPerTick = 0f)
+    {
+        var housingUnit = new HousingUnit(id, districtId, capacity, rentPerTick);
+        HousingUnits.Add(housingUnit);
+        return housingUnit;
+    }
+
+    /// <summary>
+    /// Create a household in a district and optionally seed it with citizens.
+    /// </summary>
+    public Household CreateHousehold(
+        int? districtId,
+        IEnumerable<Citizen>? members = null,
+        int? housingUnitId = null,
+        int housingCapacity = 0,
+        float rentPerTick = 0f)
+    {
+        var household = new Household(districtId, housingUnitId, housingCapacity, rentPerTick);
+        Households.Add(household);
+
+        if (members != null)
+        {
+            foreach (var member in members)
+            {
+                AddCitizenToHousehold(member, household);
+            }
+        }
+
+        if (housingUnitId.HasValue)
+        {
+            var housingUnit = GetHousingUnit(housingUnitId.Value);
+            if (housingUnit != null)
+            {
+                AssignHouseholdToHousingUnit(household, housingUnit);
+            }
+        }
+
+        return household;
+    }
+
+    public bool AssignHouseholdToHousingUnit(Household household, HousingUnit housingUnit)
+    {
+        if (household == null) throw new ArgumentNullException(nameof(household));
+        if (housingUnit == null) throw new ArgumentNullException(nameof(housingUnit));
+        if (housingUnit.HouseholdId.HasValue && housingUnit.HouseholdId.Value != household.Id)
+        {
+            return false;
+        }
+
+        if (household.HousingUnitId.HasValue && household.HousingUnitId.Value != housingUnit.Id)
+        {
+            var currentHousingUnit = GetHousingUnit(household.HousingUnitId.Value);
+            if (currentHousingUnit != null && currentHousingUnit.HouseholdId == household.Id)
+            {
+                currentHousingUnit.HouseholdId = null;
+            }
+        }
+
+        housingUnit.HouseholdId = household.Id;
+        household.HousingUnitId = housingUnit.Id;
+        household.HousingCapacity = housingUnit.Capacity;
+        household.RentPerTick = housingUnit.RentPerTick;
+
+        if (housingUnit.DistrictId.HasValue)
+        {
+            household.DistrictId = housingUnit.DistrictId;
+            foreach (var memberId in household.MemberIds)
+            {
+                var member = GetCitizen(memberId);
+                if (member != null)
+                {
+                    member.DistrictId = housingUnit.DistrictId;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    public void ReleaseHouseholdHousing(Household household)
+    {
+        if (household == null) throw new ArgumentNullException(nameof(household));
+
+        if (household.HousingUnitId.HasValue)
+        {
+            var housingUnit = GetHousingUnit(household.HousingUnitId.Value);
+            if (housingUnit != null && housingUnit.HouseholdId == household.Id)
+            {
+                housingUnit.HouseholdId = null;
+            }
+        }
+
+        household.HousingUnitId = null;
+        household.HousingCapacity = 0;
+        household.RentPerTick = 0f;
+    }
+
+    /// <summary>
+    /// Recalculate derived household values from current citizens.
+    /// </summary>
+    public void RecalculateHouseholds()
+    {
+        foreach (var household in Households.ToList())
+        {
+            household.MemberIds.RemoveAll(memberId => GetCitizen(memberId) == null);
+            if (household.MemberIds.Count == 0)
+            {
+                ReleaseHouseholdHousing(household);
+                Households.Remove(household);
+                continue;
+            }
+
+            household.RecalculateIncome(Citizens);
+        }
+    }
+
+    /// <summary>
+    /// Assign a citizen to a household while keeping both sides in sync.
+    /// </summary>
+    public void AddCitizenToHousehold(Citizen citizen, Household household)
+    {
+        if (citizen == null) throw new ArgumentNullException(nameof(citizen));
+        if (household == null) throw new ArgumentNullException(nameof(household));
+
+        if (citizen.HouseholdId.HasValue && citizen.HouseholdId.Value != household.Id)
+        {
+            RemoveCitizenFromHousehold(citizen);
+        }
+
+        citizen.HouseholdId = household.Id;
+        if (!household.MemberIds.Contains(citizen.Id))
+        {
+            household.MemberIds.Add(citizen.Id);
+        }
+
+        if (citizen.DistrictId == null)
+        {
+            citizen.DistrictId = household.DistrictId;
+        }
+        else if (household.DistrictId == null)
+        {
+            household.DistrictId = citizen.DistrictId;
+        }
+
+        household.RecalculateIncome(Citizens);
+    }
+
+    /// <summary>
+    /// Remove a citizen from their household while keeping both sides in sync.
+    /// </summary>
+    public void RemoveCitizenFromHousehold(Citizen citizen)
+    {
+        if (citizen == null) throw new ArgumentNullException(nameof(citizen));
+        if (!citizen.HouseholdId.HasValue) return;
+
+        var household = GetHousehold(citizen.HouseholdId.Value);
+        if (household != null)
+        {
+            household.MemberIds.Remove(citizen.Id);
+            if (household.MemberIds.Count == 0)
+            {
+                ReleaseHouseholdHousing(household);
+                Households.Remove(household);
+            }
+            else
+            {
+                household.RecalculateIncome(Citizens);
+            }
+        }
+
+        citizen.HouseholdId = null;
+    }
     
     /// <summary>
     /// Get all citizens by profession.
@@ -147,7 +467,7 @@ using GreenDistrict.Simulation.Behavior;
     /// </summary>
     public List<Citizen> GetUnemployedCitizens()
     {
-        return Citizens.Where(c => string.IsNullOrEmpty(c.Job)).ToList();
+        return Citizens.Where(c => c.EmploymentStatus == EmploymentStatus.Unemployed).ToList();
     }
     
     /// <summary>
@@ -179,154 +499,68 @@ using GreenDistrict.Simulation.Behavior;
             Average Satisfaction: {GetAverageSatisfaction():F1}%
             """;
     }
-}
 
-/// <summary>
-/// Represents a single simulated citizen.
-/// </summary>
-public class Citizen
-{
-    private static int _nextId = 1;
-    
-    public int Id { get; }
-    public string Name { get; set; }
-    public int Age { get; set; }
-    public int? DistrictId { get; set; }
-    public string Profession { get; set; }
-    public string? Job { get; set; } // Which business they work at (if any)
-    public float Income { get; set; }
-    public float Satisfaction { get; set; } = 50f; // 0-100%
-    public float Mood { get; set; } = 50f; // 0-100%
-    public float Health { get; set; } = 100f; // 0-100%
-    public bool IsRetired { get; set; } = false;
-    
-    public Gender Gender { get; set; }
-    public int? HouseholdId { get; set; }
-    
-    // Needs satisfaction (0-100%)
-    public float FoodSatisfaction { get; set; }
-    public float HousingSatisfaction { get; set; }
-    public float SafetySatisfaction { get; set; }
-    public float HealthcareSatisfaction { get; set; }
-    public float EntertainmentSatisfaction { get; set; }
-    
-    public Citizen(string name, int age, string profession, Gender gender = Gender.Female)
+    private void ClearSimulationState()
     {
-        Id = _nextId++;
-        Name = name;
-        Age = age;
-        Profession = profession;
-        Gender = gender;
+        _clock.Reset();
+        Citizens.Clear();
+        Households.Clear();
+        HousingUnits.Clear();
+        Districts.Clear();
+        Businesses.Clear();
+        Projects.Clear();
+        Events.Clear();
+        LastUnemploymentRate = 0f;
+        LastIncomeTaxCollected = 0f;
+        LastBusinessTaxCollected = 0f;
+        LastOperatingExpenses = 0f;
+        LastNetBudgetChange = 0f;
     }
-    
-    /// <summary>
-    /// Calculate overall satisfaction from individual needs.
-    /// </summary>
-    public void RecalculateSatisfaction()
+
+    private void ReconcileScenarioJobs()
     {
-        Satisfaction = (FoodSatisfaction + HousingSatisfaction + SafetySatisfaction + 
-                       HealthcareSatisfaction + EntertainmentSatisfaction) / 5f;
-        Satisfaction = Math.Clamp(Satisfaction, 0f, 100f);
-    }
-    
-    /// <summary>
-    /// Update mood based on satisfaction and other factors.
-    /// </summary>
-    public void UpdateMood()
-    {
-        // Mood shifts towards current satisfaction (do not overwrite Satisfaction here)
-        Mood += (Satisfaction - Mood) * 0.1f; // Gradual change
-        Mood = Math.Clamp(Mood, 0f, 100f);
-        
-        // Health decay if not eating well
-        if (FoodSatisfaction < 30f)
+        foreach (var business in Businesses)
         {
-            Health -= 1f;
+            business.EmployeeIds.Clear();
+            business.EmployeeCount = 0;
         }
-        else if (FoodSatisfaction > 70f)
+
+        foreach (var citizen in Citizens)
         {
-            Health += 0.5f;
+            if (string.IsNullOrEmpty(citizen.Job)) continue;
+            if (!EconomySystem.IsEligibleForWork(citizen))
+            {
+                citizen.Job = null;
+                continue;
+            }
+
+            var business = Businesses.FirstOrDefault(b => string.Equals(b.Name, citizen.Job, StringComparison.Ordinal));
+            if (business == null || business.EmployeeIds.Count >= business.MaxEmployees)
+            {
+                citizen.Job = null;
+                continue;
+            }
+
+            if (!business.EmployeeIds.Contains(citizen.Id))
+            {
+                business.EmployeeIds.Add(citizen.Id);
+                business.EmployeeCount = business.EmployeeIds.Count;
+            }
         }
-        Health = Math.Clamp(Health, 0f, 100f);
     }
-}
 
-/// <summary>
-/// Represents a district or region.
-/// </summary>
-public class District
-{
-    public int Id { get; set; }
-    public string Name { get; set; }
-    public int Population { get; set; }
-    public float AverageSatisfaction { get; set; }
-    public float EconomicLevel { get; set; } // 0-100%
-    
-    public District(string name)
+    private static Gender ParseGender(string? gender)
     {
-        Name = name;
+        return Enum.TryParse<Gender>(gender, ignoreCase: true, out var parsed)
+            ? parsed
+            : Gender.Other;
     }
-}
 
-/// <summary>
-/// Represents a business or workplace.
-/// </summary>
-public class Business
-{
-    public int Id { get; set; }
-    public string Name { get; set; }
-    public int? DistrictId { get; set; }
-    public string Type { get; set; } // farm, factory, shop, etc.
-    public List<int> EmployeeIds { get; } = new();
-    public float WagePerEmployee { get; set; } = 500f;
-    public int EmployeeCount { get; set; }
-    public int MaxEmployees { get; set; }
-    public float Revenue { get; set; }
-    public float Expenses { get; set; }
-    
-    public Business(string name, string type, int maxEmployees)
+    private static BusinessStatus ParseBusinessStatus(string? status)
     {
-        Name = name;
-        Type = type;
-        MaxEmployees = maxEmployees;
-    }
-    
-    public float GetProfit() => Revenue - Expenses;
-}
-
-/// <summary>
-/// Represents a game event or notification.
-/// </summary>
-public class GameEvent
-{
-    public int Id { get; set; }
-    public string Title { get; set; }
-    public string Description { get; set; }
-    public long CreatedAtTick { get; set; }
-    public EventType Type { get; set; }
-    
-    public GameEvent(string title, string description, EventType type)
-    {
-        Title = title;
-        Description = description;
-        Type = type;
+        return Enum.TryParse<BusinessStatus>(status, ignoreCase: true, out var parsed)
+            ? parsed
+            : BusinessStatus.Active;
     }
 }
 
-public enum EventType
-{
-    Notification,
-    Crisis,
-    Decision,
-    Election,
-    Economic,
-    Social,
-    Political
-}
-
-public enum Gender
-{
-    Male,
-    Female,
-    Other
-}

@@ -9,7 +9,7 @@
     },
     {
       "id": "worker",
-      "name": Factory Worker",
+      "name": "Factory Worker",
       "description": "Manufacturing worker",
       "baseWage": 500,
       "skillLevel": 2
