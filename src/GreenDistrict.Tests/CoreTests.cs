@@ -333,6 +333,164 @@ public class WorldStateTests
         Assert.Equal(0, household.HousingCapacity);
         Assert.Equal(0f, household.RentPerTick);
     }
+
+    [Fact]
+    public void PoliticalSupportUpdate_Computes_District_And_Global_Support()
+    {
+        var world = new WorldState();
+        var district = new District("North") { Id = 1 };
+        world.Districts.Add(district);
+
+        var employed = new Citizen("A", 30, "Worker")
+        {
+            DistrictId = 1,
+            Satisfaction = 80f,
+            SafetySatisfaction = 60f,
+            HealthcareSatisfaction = 80f,
+            EntertainmentSatisfaction = 60f,
+            Job = "Farm"
+        };
+        var second = new Citizen("B", 30, "Worker")
+        {
+            DistrictId = 1,
+            Satisfaction = 80f,
+            SafetySatisfaction = 60f,
+            HealthcareSatisfaction = 80f,
+            EntertainmentSatisfaction = 60f
+        };
+        world.Citizens.Add(employed);
+        world.Citizens.Add(second);
+
+        world.UpdateManager.ExecutePhase(UpdatePhase.DistrictAggregates);
+        world.UpdateManager.ExecutePhase(UpdatePhase.PoliticalSupportUpdate);
+
+        Assert.Equal(67.5f, district.SupportRating);
+        Assert.Equal(67.5f, world.SupportRating);
+    }
+
+    [Fact]
+    public void CrisisProgression_Starts_And_Resolves_District_Crisis()
+    {
+        var world = new WorldState();
+        var district = new District("North")
+        {
+            Id = 1,
+            Population = 10,
+            SupportRating = 10f,
+            AverageSafetySatisfaction = 10f,
+            ServiceLevel = 10f,
+            EmploymentRate = 10f
+        };
+        world.Districts.Add(district);
+
+        world.UpdateManager.ExecutePhase(UpdatePhase.CrisisProgression);
+        world.UpdateManager.ExecutePhase(UpdatePhase.CrisisProgression);
+
+        Assert.True(district.HasActiveCrisis);
+        Assert.True(district.CrisisRisk >= 35f);
+        Assert.Single(world.Events, e => e.Type == EventType.Crisis);
+
+        district.SupportRating = 80f;
+        district.AverageSafetySatisfaction = 80f;
+        district.ServiceLevel = 80f;
+        district.EmploymentRate = 80f;
+        world.UpdateManager.ExecutePhase(UpdatePhase.CrisisProgression);
+
+        Assert.False(district.HasActiveCrisis);
+        Assert.Contains(world.Events, e => e.Type == EventType.Political && e.Title.Contains("resolved"));
+    }
+
+    [Fact]
+    public void ResolveEventChoice_Applies_Choice_Effects_Once()
+    {
+        var world = new WorldState();
+        world.Districts.Add(new District("North") { Id = 1 });
+        var citizen = new Citizen("A", 30, "Worker")
+        {
+            DistrictId = 1,
+            SafetySatisfaction = 30f,
+            HealthcareSatisfaction = 40f
+        };
+        world.Citizens.Add(citizen);
+
+        var gameEvent = new GameEvent("Budget decision", "Choose a response.", EventType.Decision);
+        gameEvent.Choices.Add(new EventChoice("spend", "Spend funds")
+        {
+            DistrictId = 1,
+            BudgetEffect = -100f,
+            SupportEffect = 3f,
+            SafetySatisfactionEffect = 10f,
+            HealthcareSatisfactionEffect = 5f
+        });
+        world.Events.Add(gameEvent);
+
+        var resolved = world.ResolveEventChoice(gameEvent.Id, "spend");
+        var resolvedAgain = world.ResolveEventChoice(gameEvent.Id, "spend");
+
+        Assert.True(resolved);
+        Assert.False(resolvedAgain);
+        Assert.True(gameEvent.IsResolved);
+        Assert.Equal("spend", gameEvent.SelectedChoiceId);
+        Assert.Equal(9900f, world.Budget);
+        Assert.Equal(78f, world.SupportRating);
+        Assert.Equal(40f, citizen.SafetySatisfaction);
+        Assert.Equal(45f, citizen.HealthcareSatisfaction);
+    }
+
+    [Fact]
+    public void CrisisEvent_Has_Choices_And_Funded_Response_Resolves_Crisis()
+    {
+        var world = new WorldState();
+        var district = new District("North")
+        {
+            Id = 1,
+            Population = 5,
+            SupportRating = 10f,
+            AverageSafetySatisfaction = 10f,
+            ServiceLevel = 10f,
+            EmploymentRate = 10f
+        };
+        world.Districts.Add(district);
+        world.Citizens.Add(new Citizen("A", 30, "Worker")
+        {
+            DistrictId = 1,
+            SafetySatisfaction = 10f,
+            HealthcareSatisfaction = 10f
+        });
+
+        world.UpdateManager.ExecutePhase(UpdatePhase.CrisisProgression);
+        var crisis = Assert.Single(world.Events, e => e.Type == EventType.Crisis);
+
+        Assert.True(crisis.HasChoices);
+        Assert.Contains(crisis.Choices, c => c.Id == "fund-response");
+
+        var resolved = world.ResolveEventChoice(crisis.Id, "fund-response");
+
+        Assert.True(resolved);
+        Assert.True(crisis.IsResolved);
+        Assert.False(district.HasActiveCrisis);
+        Assert.Equal(9500f, world.Budget);
+        Assert.True(world.SupportRating > 75f);
+    }
+
+    [Fact]
+    public void ElectionCheck_Updates_Power_From_Support()
+    {
+        var world = new WorldState
+        {
+            ElectionIntervalTicks = 2,
+            SupportRating = 49f
+        };
+
+        world.Clock.AdvanceTicks(2);
+        world.UpdateManager.ExecutePhase(UpdatePhase.ElectionCheck);
+
+        Assert.False(world.IsInPower);
+        Assert.Equal(1, world.ElectionCount);
+        Assert.Equal(2, world.LastElectionTick);
+        Assert.Equal(49f, world.LastElectionSupport);
+        Assert.Contains(world.Events, e => e.Type == EventType.Election);
+    }
 }
 
 public class CitizenTests

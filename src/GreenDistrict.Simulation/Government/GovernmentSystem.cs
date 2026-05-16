@@ -40,9 +40,10 @@ public class GovernmentSystem
             if (project.RemainingTicks <= 0)
             {
                 project.Completed = true;
-                // Apply benefit
                 world.Budget += project.Benefit;
-                // Create an event
+                ApplyProjectEffects(world, project);
+                world.DistrictsSystem.UpdateDistrictAggregates(world);
+
                 var ev = new GameEvent($"Project {project.Name} completed", $"Project {project.Name} completed and delivered benefit {project.Benefit}", EventType.Economic)
                 {
                     CreatedAtTick = world.Clock.CurrentTick
@@ -72,5 +73,49 @@ public class GovernmentSystem
         world.Events.Add(ev);
 
         return refund;
+    }
+
+    private static void ApplyProjectEffects(WorldState world, GovernmentProject project)
+    {
+        var affectedCitizens = project.DistrictId.HasValue
+            ? world.Citizens.Where(c => c.DistrictId == project.DistrictId.Value)
+            : world.Citizens;
+
+        foreach (var citizen in affectedCitizens)
+        {
+            citizen.FoodSatisfaction = ClampSatisfaction(citizen.FoodSatisfaction + project.FoodSatisfactionEffect);
+            citizen.HousingSatisfaction = ClampSatisfaction(citizen.HousingSatisfaction + project.HousingSatisfactionEffect);
+            citizen.SafetySatisfaction = ClampSatisfaction(citizen.SafetySatisfaction + project.SafetySatisfactionEffect);
+            citizen.HealthcareSatisfaction = ClampSatisfaction(citizen.HealthcareSatisfaction + project.HealthcareSatisfactionEffect);
+            citizen.EntertainmentSatisfaction = ClampSatisfaction(citizen.EntertainmentSatisfaction + project.EntertainmentSatisfactionEffect);
+            citizen.RecalculateSatisfaction();
+        }
+
+        CreateHousingUnits(world, project);
+        world.SupportRating = Math.Clamp(world.SupportRating + project.SupportEffect, 0f, 100f);
+    }
+
+    private static void CreateHousingUnits(WorldState world, GovernmentProject project)
+    {
+        if (!project.DistrictId.HasValue) return;
+        if (project.HousingUnitsToCreate <= 0 || project.HousingUnitCapacity <= 0) return;
+
+        var nextId = world.HousingUnits.Count == 0
+            ? 1
+            : world.HousingUnits.Max(h => h.Id) + 1;
+
+        for (var i = 0; i < project.HousingUnitsToCreate; i++)
+        {
+            world.AddHousingUnit(
+                nextId + i,
+                project.DistrictId.Value,
+                project.HousingUnitCapacity,
+                project.HousingUnitRentPerTick);
+        }
+    }
+
+    private static float ClampSatisfaction(float value)
+    {
+        return Math.Clamp(value, 0f, 100f);
     }
 }

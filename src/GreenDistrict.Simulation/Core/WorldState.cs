@@ -43,6 +43,7 @@ using GreenDistrict.Simulation.Scenarios;
     public float BusinessTaxRate { get; set; } = 0.10f;
     public float BaseOperatingExpensePerTick { get; set; } = 0f;
     public float ProjectOperatingExpensePerTick { get; set; } = 0f;
+    public int ElectionIntervalTicks { get; set; } = 1440 * 365 * 4;
     
     public SimulationClock Clock => _clock;
     public UpdateManager UpdateManager => _updateManager;
@@ -58,6 +59,9 @@ using GreenDistrict.Simulation.Scenarios;
     public float LastBusinessTaxCollected { get; set; }
     public float LastOperatingExpenses { get; set; }
     public float LastNetBudgetChange { get; set; }
+    public long LastElectionTick { get; private set; } = -1;
+    public float LastElectionSupport { get; private set; }
+    public int ElectionCount { get; private set; }
     
     public WorldState()
     {
@@ -105,20 +109,9 @@ using GreenDistrict.Simulation.Scenarios;
             }
         });
 
-        // CrisisProgression: small, bounded support penalty per active crisis event
-        _updateManager.Register(UpdatePhase.CrisisProgression, () => {
-            var crises = Events.Count(e => e.Type == EventType.Crisis);
-            if (crises > 0)
-            {
-                SupportRating = Math.Clamp(SupportRating - crises * 0.05f, 0f, 100f);
-            }
-        });
-
-        // PoliticalSupportUpdate: nudge support towards average satisfaction
-        _updateManager.Register(UpdatePhase.PoliticalSupportUpdate, () => {
-            var avg = GetAverageSatisfaction();
-            SupportRating = Math.Clamp(SupportRating + (avg - SupportRating) * 0.01f, 0f, 100f);
-        });
+        _updateManager.Register(UpdatePhase.CrisisProgression, UpdateCrises);
+        _updateManager.Register(UpdatePhase.PoliticalSupportUpdate, UpdatePoliticalSupport);
+        _updateManager.Register(UpdatePhase.ElectionCheck, CheckElection);
         // Instantiate DemographySystem
         _demographySystem = new DemographySystem();
         // Demography: run aging/births/deaths on TimeUpdate (annual within DemographySystem)
@@ -483,6 +476,37 @@ using GreenDistrict.Simulation.Scenarios;
         if (Citizens.Count == 0) return 0f;
         return Citizens.Average(c => c.Satisfaction);
     }
+
+    public bool ResolveEventChoice(int eventId, string choiceId)
+    {
+        if (string.IsNullOrWhiteSpace(choiceId)) throw new ArgumentException("Choice id cannot be empty.", nameof(choiceId));
+
+        var gameEvent = Events.FirstOrDefault(e => e.Id == eventId);
+        if (gameEvent == null || gameEvent.IsResolved) return false;
+
+        var choice = gameEvent.Choices.FirstOrDefault(c => string.Equals(c.Id, choiceId, StringComparison.Ordinal));
+        if (choice == null) return false;
+        if (Budget + choice.BudgetEffect < 0f) return false;
+
+        Budget += choice.BudgetEffect;
+        SupportRating = Math.Clamp(SupportRating + choice.SupportEffect, 0f, 100f);
+        ApplyChoiceCitizenEffects(choice);
+
+        if (choice.ResolveDistrictCrisis && choice.DistrictId.HasValue)
+        {
+            var district = Districts.FirstOrDefault(d => d.Id == choice.DistrictId.Value);
+            if (district != null)
+            {
+                district.HasActiveCrisis = false;
+                district.CrisisRisk = 0f;
+            }
+        }
+
+        gameEvent.IsResolved = true;
+        gameEvent.SelectedChoiceId = choice.Id;
+        _districtSystem.UpdateDistrictAggregates(this);
+        return true;
+    }
     
     /// <summary>
     /// Debug: Get system state summary.
@@ -515,6 +539,147 @@ using GreenDistrict.Simulation.Scenarios;
         LastBusinessTaxCollected = 0f;
         LastOperatingExpenses = 0f;
         LastNetBudgetChange = 0f;
+        LastElectionTick = -1;
+        LastElectionSupport = 0f;
+        ElectionCount = 0;
+    }
+
+    private void UpdatePoliticalSupport()
+    {
+        if (Districts.Count == 0)
+        {
+            var avg = GetAverageSatisfaction();
+            SupportRating = Math.Clamp(SupportRating + (avg - SupportRating) * 0.01f, 0f, 100f);
+            return;
+        }
+
+        foreach (var district in Districts)
+        {
+            var target = district.Population == 0
+                ? 50f
+                : district.AverageSatisfaction * 0.45f
+                  + district.EmploymentRate * 0.20f
+                  + district.ServiceLevel * 0.15f
+                  + district.EconomicLevel * 0.10f
+                  + district.AverageSafetySatisfaction * 0.10f;
+
+            district.SupportRating = Math.Clamp(target, 0f, 100f);
+        }
+
+        var populatedDistricts = Districts.Where(d => d.Population > 0).ToList();
+        if (populatedDistricts.Count == 0)
+        {
+            SupportRating = Math.Clamp(Districts.Average(d => d.SupportRating), 0f, 100f);
+            return;
+        }
+
+        var population = populatedDistricts.Sum(d => d.Population);
+        SupportRating = Math.Clamp(
+            populatedDistricts.Sum(d => d.SupportRating * d.Population) / population,
+            0f,
+            100f);
+    }
+
+    private void UpdateCrises()
+    {
+        foreach (var district in Districts)
+        {
+            if (district.Population == 0)
+            {
+                district.CrisisRisk = 0f;
+                district.HasActiveCrisis = false;
+                continue;
+            }
+
+            var supportPressure = Math.Max(0f, 45f - district.SupportRating);
+            var safetyPressure = Math.Max(0f, 35f - district.AverageSafetySatisfaction);
+            var servicePressure = Math.Max(0f, 35f - district.ServiceLevel);
+            var employmentPressure = Math.Max(0f, 45f - district.EmploymentRate);
+            district.CrisisRisk = Math.Clamp(supportPressure + safetyPressure + servicePressure + employmentPressure, 0f, 100f);
+
+            if (!district.HasActiveCrisis && district.CrisisRisk >= 35f)
+            {
+                district.HasActiveCrisis = true;
+                var crisisEvent = new GameEvent(
+                    $"Crisis in {district.Name}",
+                    $"{district.Name} is facing a political crisis.",
+                    EventType.Crisis)
+                {
+                    CreatedAtTick = Clock.CurrentTick
+                };
+                crisisEvent.Choices.Add(new EventChoice("fund-response", "Fund emergency response", "Spend budget to stabilize the district.")
+                {
+                    DistrictId = district.Id,
+                    BudgetEffect = -500f,
+                    SupportEffect = 2f,
+                    SafetySatisfactionEffect = 8f,
+                    HealthcareSatisfactionEffect = 4f,
+                    ResolveDistrictCrisis = true
+                });
+                crisisEvent.Choices.Add(new EventChoice("public-address", "Public address", "Address the crisis without direct spending.")
+                {
+                    DistrictId = district.Id,
+                    SupportEffect = 0.5f,
+                    SafetySatisfactionEffect = 2f
+                });
+                Events.Add(crisisEvent);
+            }
+            else if (district.HasActiveCrisis && district.CrisisRisk < 15f)
+            {
+                district.HasActiveCrisis = false;
+                Events.Add(new GameEvent(
+                    $"Crisis resolved in {district.Name}",
+                    $"{district.Name} has stabilized.",
+                    EventType.Political)
+                {
+                    CreatedAtTick = Clock.CurrentTick
+                });
+            }
+        }
+
+        var activeCrises = Districts.Count(d => d.HasActiveCrisis);
+        if (activeCrises > 0)
+        {
+            SupportRating = Math.Clamp(SupportRating - activeCrises * 0.05f, 0f, 100f);
+        }
+    }
+
+    private void ApplyChoiceCitizenEffects(EventChoice choice)
+    {
+        var affectedCitizens = choice.DistrictId.HasValue
+            ? Citizens.Where(c => c.DistrictId == choice.DistrictId.Value)
+            : Citizens;
+
+        foreach (var citizen in affectedCitizens)
+        {
+            citizen.FoodSatisfaction = Math.Clamp(citizen.FoodSatisfaction + choice.FoodSatisfactionEffect, 0f, 100f);
+            citizen.HousingSatisfaction = Math.Clamp(citizen.HousingSatisfaction + choice.HousingSatisfactionEffect, 0f, 100f);
+            citizen.SafetySatisfaction = Math.Clamp(citizen.SafetySatisfaction + choice.SafetySatisfactionEffect, 0f, 100f);
+            citizen.HealthcareSatisfaction = Math.Clamp(citizen.HealthcareSatisfaction + choice.HealthcareSatisfactionEffect, 0f, 100f);
+            citizen.EntertainmentSatisfaction = Math.Clamp(citizen.EntertainmentSatisfaction + choice.EntertainmentSatisfactionEffect, 0f, 100f);
+            citizen.RecalculateSatisfaction();
+        }
+    }
+
+    private void CheckElection()
+    {
+        if (ElectionIntervalTicks <= 0) return;
+        if (Clock.CurrentTick <= 0) return;
+        if (Clock.CurrentTick == LastElectionTick) return;
+        if (Clock.CurrentTick % ElectionIntervalTicks != 0) return;
+
+        ElectionCount++;
+        LastElectionTick = Clock.CurrentTick;
+        LastElectionSupport = SupportRating;
+        IsInPower = SupportRating >= 50f;
+
+        Events.Add(new GameEvent(
+            IsInPower ? "Election won" : "Election lost",
+            $"Election result: support {SupportRating:F1}%.",
+            EventType.Election)
+        {
+            CreatedAtTick = Clock.CurrentTick
+        });
     }
 
     private void ReconcileScenarioJobs()

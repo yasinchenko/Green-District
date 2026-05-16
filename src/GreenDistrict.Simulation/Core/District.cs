@@ -15,6 +15,9 @@ public class District
     public float AverageEntertainmentSatisfaction { get; set; }
     public float ServiceLevel { get; set; }
     public float EconomicLevel { get; set; } // 0-100%
+    public float SupportRating { get; set; } = 75f;
+    public float CrisisRisk { get; set; }
+    public bool HasActiveCrisis { get; set; }
     public int TotalJobs { get; set; }
     public int OpenJobs { get; set; }
     public float EmploymentRate { get; set; }
