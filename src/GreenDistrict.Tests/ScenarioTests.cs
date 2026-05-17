@@ -18,10 +18,10 @@ public class ScenarioTests
         Assert.Equal(10000f, world.Budget);
         Assert.Equal(75f, world.SupportRating);
         Assert.Equal(2, world.Districts.Count);
-        Assert.Equal(2, world.Businesses.Count);
-        Assert.Equal(4, world.Citizens.Count);
-        Assert.Equal(2, world.Households.Count);
-        Assert.Equal(3, world.HousingUnits.Count);
+        Assert.Equal(4, world.Businesses.Count);
+        Assert.Equal(50, world.Citizens.Count);
+        Assert.True(world.Households.Count >= 12);
+        Assert.True(world.HousingUnits.Sum(h => h.Capacity) >= 50);
         Assert.Single(world.Projects);
         Assert.Contains(world.Businesses, b => b.Name == "Central Farm" && b.BaseOutput > 0f && b.UnitPrice > 0f);
         Assert.Contains(world.Citizens, c => c.Name == "Maria Green" && c.EmploymentStatus == EmploymentStatus.Employed);
@@ -108,6 +108,23 @@ public class ScenarioTests
         Assert.NotEmpty(world.Households);
         Assert.NotEmpty(world.HousingUnits);
         Assert.NotEmpty(world.Projects);
+        Assert.Equal(50, world.GetTotalPopulation());
+        Assert.True(world.HousingUnits.Sum(h => h.Capacity) >= world.GetTotalPopulation());
+        Assert.True(world.Businesses.Sum(b => b.MaxEmployees) >= world.Citizens.Count(c => c.LifeStage == LifeStage.Adult && !c.IsRetired));
+    }
+
+    [Fact]
+    public void BuiltIn_DefaultScenario_Starts_With_Economic_Critical_Mass()
+    {
+        var scenario = WorldScenarioLoader.CreateDefault();
+        var world = new WorldState();
+
+        world.Initialize(scenario);
+
+        Assert.Equal(50, world.GetTotalPopulation());
+        Assert.True(world.Households.Count >= 12);
+        Assert.True(world.HousingUnits.Sum(h => h.Capacity) >= 50);
+        Assert.InRange(world.LastUnemploymentRate, 0f, 25f);
     }
 
     [Fact]

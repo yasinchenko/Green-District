@@ -1,6 +1,8 @@
 using System;
+using System.IO;
 using System.Linq;
 using GreenDistrict.Simulation.Core;
+using GreenDistrict.Simulation.Persistence;
 using GreenDistrict.Simulation.Scenarios;
 using Godot;
 
@@ -36,7 +38,41 @@ public partial class SimulationBridge : Node
     public bool StartProject(ProjectType type, int? districtId)
     {
         var project = GovernmentProject.CreateTyped(type, districtId);
-        return World.Government.StartProject(World, project);
+        var started = World.Government.StartProject(World, project);
+        if (started)
+        {
+            World.DistrictsSystem.UpdateDistrictAggregates(World);
+        }
+
+        return started;
+    }
+
+    public bool ResolveEventChoice(int eventId, string choiceId)
+    {
+        return World.ResolveEventChoice(eventId, choiceId);
+    }
+
+    public void SaveWorld(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) throw new ArgumentException("Save path cannot be empty.", nameof(path));
+
+        var directory = Path.GetDirectoryName(path);
+        if (!string.IsNullOrWhiteSpace(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        WorldStateSerializer.SaveJsonFile(World, path);
+    }
+
+    public bool LoadWorld(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) throw new ArgumentException("Save path cannot be empty.", nameof(path));
+        if (!File.Exists(path)) return false;
+
+        World = WorldStateSerializer.LoadJsonFile(path);
+        World.DistrictsSystem.UpdateDistrictAggregates(World);
+        return true;
     }
 
     public global::Godot.Collections.Dictionary GetSnapshot()

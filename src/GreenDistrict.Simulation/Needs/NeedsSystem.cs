@@ -21,11 +21,11 @@ public class NeedsSystem
     public float StableHousingRecoveryPerTick { get; }
 
     public NeedsSystem(
-        float foodDecayPerTick = 0.01f,
+        float foodDecayPerTick = 0.001f,
         float housingDecayPerTick = 0.002f,
-        float safetyDecayPerTick = 0.001f,
-        float healthcareDecayPerTick = 0.001f,
-        float entertainmentDecayPerTick = 0.005f,
+        float safetyDecayPerTick = 0.0003f,
+        float healthcareDecayPerTick = 0.0003f,
+        float entertainmentDecayPerTick = 0.001f,
         float noHousingPenaltyPerTick = 0.05f,
         float overcrowdingPenaltyPerExtraPersonPerTick = 0.02f,
         float highRentBurdenPenaltyPerTick = 0.03f,

@@ -12,6 +12,7 @@ public class WorldScenario
     public float BaseOperatingExpensePerTick { get; set; }
     public float ProjectOperatingExpensePerTick { get; set; }
     public int Seed { get; set; }
+    public int? InitialPopulation { get; set; }
     public int DemographyTicksPerYear { get; set; } = 1440 * 365;
     public float BirthRatePerPersonPerYear { get; set; } = 0.02f;
     public float BaseDeathRatePerPersonPerYear { get; set; } = 0.01f;

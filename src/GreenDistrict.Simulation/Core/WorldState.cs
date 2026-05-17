@@ -241,6 +241,11 @@ using GreenDistrict.Simulation.Scenarios;
                 householdSeed.RentPerTick);
         }
 
+        if (scenario.InitialPopulation.HasValue)
+        {
+            EnsureInitialPopulation(scenario.InitialPopulation.Value);
+        }
+
         foreach (var projectSeed in scenario.Projects)
         {
             Projects.Add(CreateProjectFromScenario(projectSeed));
@@ -772,6 +777,98 @@ using GreenDistrict.Simulation.Scenarios;
                 business.EmployeeIds.Add(citizen.Id);
                 business.EmployeeCount = business.EmployeeIds.Count;
             }
+        }
+    }
+
+    private void EnsureInitialPopulation(int targetPopulation)
+    {
+        if (targetPopulation <= Citizens.Count || Districts.Count == 0) return;
+
+        var districtIds = Districts.OrderBy(d => d.Id).Select(d => d.Id).ToList();
+        var jobSlots = Businesses
+            .OrderBy(b => b.Id)
+            .ToDictionary(
+                b => b.Name,
+                b => Math.Max(0, b.MaxEmployees - Citizens.Count(c => string.Equals(c.Job, b.Name, StringComparison.Ordinal) && EconomySystem.IsEligibleForWork(c))),
+                StringComparer.Ordinal);
+
+        var nextHousingId = HousingUnits.Count == 0 ? 1 : HousingUnits.Max(h => h.Id) + 1;
+        var generatedIndex = 1;
+        var nextDistrictIndex = Citizens.Count;
+
+        while (Citizens.Count < targetPopulation)
+        {
+            var districtId = districtIds[nextDistrictIndex % districtIds.Count];
+            nextDistrictIndex++;
+
+            var remaining = targetPopulation - Citizens.Count;
+            var householdSize = Math.Min(4, remaining);
+            var capacity = Math.Max(2, householdSize);
+            var rent = districtId == districtIds.First() ? 20f : 25f;
+            var housingUnit = AddHousingUnit(nextHousingId++, districtId, capacity, rent);
+            var household = CreateHousehold(districtId, housingUnitId: housingUnit.Id, housingCapacity: capacity, rentPerTick: rent);
+
+            for (var slot = 0; slot < householdSize; slot++)
+            {
+                var citizen = CreateGeneratedCitizen(generatedIndex++, districtId, slot);
+                AssignGeneratedJob(citizen, jobSlots);
+                Citizens.Add(citizen);
+                AddCitizenToHousehold(citizen, household);
+            }
+        }
+    }
+
+    private static Citizen CreateGeneratedCitizen(int index, int districtId, int householdSlot)
+    {
+        var firstNames = new[]
+        {
+            "Alex", "Nina", "Victor", "Elena", "Dmitry", "Olga", "Pavel", "Marina",
+            "Sergey", "Irina", "Anton", "Yulia", "Roman", "Daria", "Mikhail", "Vera"
+        };
+        var familyNames = new[] { "Green", "River", "Stone", "Field", "North", "Lane", "Brook", "Hill" };
+        var adultAges = new[] { 22, 25, 28, 32, 36, 41, 47, 53, 59 };
+
+        var isChild = index % 7 == 0 || householdSlot == 3 && index % 3 == 0;
+        var isRetired = !isChild && index % 13 == 0;
+        var age = isChild ? 6 + index % 10 : isRetired ? 66 + index % 12 : adultAges[index % adultAges.Length];
+        var profession = isChild ? "Child" : isRetired ? "Retired" : index % 5 == 0 ? "Trader" : "Worker";
+        var gender = index % 2 == 0 ? Gender.Female : Gender.Male;
+        var firstName = firstNames[index % firstNames.Length];
+        var familyName = familyNames[(districtId + index) % familyNames.Length];
+
+        var citizen = new Citizen($"{firstName} {familyName} {index:00}", age, profession, gender)
+        {
+            DistrictId = districtId,
+            Satisfaction = 75f,
+            Mood = 75f,
+            Health = 100f,
+            FoodSatisfaction = 82f,
+            HousingSatisfaction = 82f,
+            SafetySatisfaction = 80f,
+            HealthcareSatisfaction = 78f,
+            EntertainmentSatisfaction = 76f
+        };
+
+        if (isRetired)
+        {
+            citizen.Retire();
+            citizen.Profession = "Retired";
+        }
+
+        return citizen;
+    }
+
+    private static void AssignGeneratedJob(Citizen citizen, Dictionary<string, int> jobSlots)
+    {
+        if (!EconomySystem.IsEligibleForWork(citizen)) return;
+
+        foreach (var businessName in jobSlots.Keys.ToList())
+        {
+            if (jobSlots[businessName] <= 0) continue;
+
+            citizen.Job = businessName;
+            jobSlots[businessName]--;
+            return;
         }
     }
 

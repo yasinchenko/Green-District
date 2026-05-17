@@ -66,8 +66,9 @@ public class NeedsTests
         var needs = new NeedsSystem(foodDecayPerTick: 0f, noHousingPenaltyPerTick: 0f, stableHousingRecoveryPerTick: 0f);
         needs.UpdateTick(world);
 
-        // UpdateMood reduces health by 1 when FoodSatisfaction < 30
+        // UpdateMood applies minute-scale health decay when food is poor.
         Assert.True(citizen.Health < 100f);
+        Assert.True(citizen.Health > 99f);
     }
 
     [Fact]

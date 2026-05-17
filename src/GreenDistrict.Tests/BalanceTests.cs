@@ -9,6 +9,18 @@ namespace GreenDistrict.Tests;
 public class BalanceTests
 {
     [Fact]
+    public void DefaultScenario_MinuteScaleRun_DoesNotImmediatelyCollapsePopulation()
+    {
+        var world = CreateDefaultWorld();
+        var initialPopulation = world.GetTotalPopulation();
+
+        SimulationRunner.Run(world, ticksToRun: 20 * 60);
+
+        Assert.Equal(initialPopulation, world.GetTotalPopulation());
+        Assert.DoesNotContain(world.Events, e => e.Title.StartsWith("Death:", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void DefaultScenario_HeadlessRuns_Stay_Within_Balance_Bounds()
     {
         var initialWorld = CreateBalancedDefaultWorld();
@@ -47,6 +59,16 @@ public class BalanceTests
         var scenario = WorldScenarioLoader.CreateDefault();
         scenario.Seed = 42;
         scenario.DemographyTicksPerYear = 52;
+
+        var world = new WorldState(scenario.Seed);
+        world.Initialize(scenario);
+        return world;
+    }
+
+    private static WorldState CreateDefaultWorld()
+    {
+        var scenario = WorldScenarioLoader.CreateDefault();
+        scenario.Seed = 42;
 
         var world = new WorldState(scenario.Seed);
         world.Initialize(scenario);

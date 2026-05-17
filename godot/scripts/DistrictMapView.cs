@@ -9,124 +9,1316 @@ namespace GreenDistrict.Godot.Scripts;
 
 public partial class DistrictMapView : Control
 {
-    private readonly List<PanelContainer> _tiles = new();
+    private const float MinZoom = 1f;
+    private const float MaxZoom = 2.4f;
+    private const float ZoomStep = 1.14f;
+
+    [Signal]
+    public delegate void DistrictSelectedEventHandler(int districtId);
+
+    private readonly List<MapDistrictShape> _shapes = new();
     private WorldState? _world;
+    private int? _selectedDistrictId;
+    private int? _hoveredDistrictId;
+    private Vector2 _lastSize;
+    private float _zoom = 1f;
+    private Vector2 _pan;
+    private bool _isPanning;
+    private double _animationTime;
+    private double _redrawAccumulator;
 
     public override void _Ready()
     {
         ClipContents = true;
-        Resized += LayoutTiles;
+        MouseFilter = MouseFilterEnum.Stop;
+        Resized += () =>
+        {
+            RebuildShapes();
+            ClampPan();
+            QueueRedraw();
+        };
+    }
+
+    public override void _Draw()
+    {
+        DrawRect(new Rect2(Vector2.Zero, Size), UiTheme.MapLand);
+        DrawSetTransform(_pan, 0f, new Vector2(_zoom, _zoom));
+
+        DrawMapBackground();
+
+        foreach (var shape in _shapes)
+        {
+            DrawDistrict(shape);
+        }
+
+        DrawWaterGeography();
+        DrawRoadNetwork();
+
+        foreach (var shape in _shapes)
+        {
+            DrawDistrictDetails(shape);
+        }
+
+        DrawSetTransform(Vector2.Zero, 0f, Vector2.One);
+    }
+
+    public override void _Process(double delta)
+    {
+        if (_world == null) return;
+
+        _animationTime += delta;
+        _redrawAccumulator += delta;
+        if (_redrawAccumulator < 1.0 / 18.0) return;
+
+        _redrawAccumulator = 0;
+        QueueRedraw();
+    }
+
+    public override void _GuiInput(InputEvent input)
+    {
+        if (input is InputEventMouseMotion motion)
+        {
+            if (_isPanning)
+            {
+                _pan += motion.Relative;
+                ClampPan();
+                QueueRedraw();
+                AcceptEvent();
+                return;
+            }
+
+            var mapPosition = ScreenToMap(motion.Position);
+            var hover = FindDistrictAt(mapPosition)?.District.Id;
+            if (hover != _hoveredDistrictId)
+            {
+                _hoveredDistrictId = hover;
+                TooltipText = hover.HasValue
+                    ? BuildTooltip(_shapes.First(s => s.District.Id == hover.Value).District)
+                    : string.Empty;
+                QueueRedraw();
+            }
+        }
+
+        if (input is InputEventMouseButton button)
+        {
+            if ((button.ButtonIndex == MouseButton.WheelUp || button.ButtonIndex == MouseButton.WheelDown) && button.CtrlPressed)
+            {
+                var factor = button.ButtonIndex == MouseButton.WheelUp ? ZoomStep : 1f / ZoomStep;
+                ZoomAt(button.Position, factor);
+                AcceptEvent();
+                return;
+            }
+
+            if (button.ButtonIndex is MouseButton.Right or MouseButton.Middle)
+            {
+                _isPanning = button.Pressed && _zoom > MinZoom;
+                AcceptEvent();
+                return;
+            }
+
+            if (button is { Pressed: true, ButtonIndex: MouseButton.Left })
+            {
+                SelectDistrictAt(ScreenToMap(button.Position));
+            }
+        }
+    }
+
+    public override void _UnhandledInput(InputEvent input)
+    {
+        if (input is not InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left } button) return;
+
+        var localPosition = GetLocalMousePosition();
+        if (localPosition.X < 0f || localPosition.Y < 0f || localPosition.X > Size.X || localPosition.Y > Size.Y) return;
+        if (SelectDistrictAt(ScreenToMap(localPosition)))
+        {
+            GetViewport().SetInputAsHandled();
+        }
     }
 
     public void SetWorld(WorldState world)
     {
         _world = world ?? throw new ArgumentNullException(nameof(world));
-        RebuildTiles();
-    }
-
-    private void RebuildTiles()
-    {
-        foreach (var child in GetChildren())
+        if (_lastSize != Size || _shapes.Count != _world.Districts.Count)
         {
-            RemoveChild(child);
-            child.QueueFree();
+            RebuildShapes();
         }
 
-        _tiles.Clear();
-        if (_world == null) return;
+        QueueRedraw();
+    }
 
-        foreach (var district in _world.Districts.OrderBy(d => d.Id))
+    private void ZoomAt(Vector2 screenPosition, float factor)
+    {
+        var previousZoom = _zoom;
+        var nextZoom = Math.Clamp(_zoom * factor, MinZoom, MaxZoom);
+        if (Math.Abs(nextZoom - previousZoom) < 0.001f) return;
+
+        var mapPosition = ScreenToMap(screenPosition);
+        _zoom = nextZoom;
+        _pan = screenPosition - mapPosition * _zoom;
+        ClampPan();
+        QueueRedraw();
+    }
+
+    private Vector2 ScreenToMap(Vector2 screenPosition)
+    {
+        return (screenPosition - _pan) / _zoom;
+    }
+
+    private void ClampPan()
+    {
+        if (_zoom <= MinZoom || Size.X <= 0f || Size.Y <= 0f)
         {
-            var tile = CreateDistrictTile(district);
-            AddChild(tile);
-            _tiles.Add(tile);
+            _zoom = MinZoom;
+            _pan = Vector2.Zero;
+            _isPanning = false;
+            return;
         }
 
-        LayoutTiles();
+        var minX = Size.X - Size.X * _zoom;
+        var minY = Size.Y - Size.Y * _zoom;
+        _pan = new Vector2(
+            Math.Clamp(_pan.X, minX, 0f),
+            Math.Clamp(_pan.Y, minY, 0f));
     }
 
-    private PanelContainer CreateDistrictTile(District district)
+    public void SetSelectedDistrict(int? districtId)
     {
-        var tile = new PanelContainer
-        {
-            MouseFilter = MouseFilterEnum.Stop,
-            TooltipText = BuildTooltip(district)
-        };
-        tile.AddThemeStyleboxOverride("panel", CreateTileStyle(district));
-        tile.AddThemeConstantOverride("margin_left", 10);
-        tile.AddThemeConstantOverride("margin_top", 8);
-        tile.AddThemeConstantOverride("margin_right", 10);
-        tile.AddThemeConstantOverride("margin_bottom", 8);
-
-        var rows = new VBoxContainer();
-        rows.AddThemeConstantOverride("separation", 3);
-        tile.AddChild(rows);
-
-        var name = new Label
-        {
-            Text = district.Name,
-            ClipText = true,
-            TextOverrunBehavior = TextServer.OverrunBehavior.TrimEllipsis
-        };
-        name.AddThemeFontSizeOverride("font_size", 18);
-        rows.AddChild(name);
-
-        rows.AddChild(new Label { Text = $"Pop {district.Population} | Jobs {district.TotalJobs - district.OpenJobs}/{district.TotalJobs}" });
-        rows.AddChild(new Label { Text = $"Housing {district.OccupiedHousing}/{district.HousingCapacity}" });
-        rows.AddChild(new Label { Text = $"Support {FormatPercent(district.SupportRating)}" });
-
-        return tile;
+        _selectedDistrictId = districtId;
+        QueueRedraw();
     }
 
-    private void LayoutTiles()
+    private void RebuildShapes()
     {
-        if (_tiles.Count == 0) return;
+        _shapes.Clear();
+        _lastSize = Size;
+        if (_world == null || Size.X <= 40f || Size.Y <= 40f) return;
 
-        var available = Size;
-        if (available.X <= 0f || available.Y <= 0f) return;
+        var districts = _world.Districts.OrderBy(d => d.Id).ToList();
+        var count = districts.Count;
+        if (count == 0) return;
 
-        var count = _tiles.Count;
         var columns = Math.Max(1, (int)Math.Ceiling(Math.Sqrt(count)));
         var rows = Math.Max(1, (int)Math.Ceiling(count / (float)columns));
-        const float gap = 10f;
-        var cellWidth = Math.Max(120f, (available.X - gap * (columns - 1)) / columns);
-        var cellHeight = Math.Max(96f, (available.Y - gap * (rows - 1)) / rows);
+        const float padding = 22f;
+        const float gap = 18f;
+        var cellWidth = Math.Max(120f, (Size.X - padding * 2f - gap * (columns - 1)) / columns);
+        var cellHeight = Math.Max(100f, (Size.Y - padding * 2f - gap * (rows - 1)) / rows);
 
-        for (var i = 0; i < _tiles.Count; i++)
+        for (var i = 0; i < districts.Count; i++)
         {
             var column = i % columns;
             var row = i / columns;
-            var tile = _tiles[i];
-            tile.Position = new Vector2(column * (cellWidth + gap), row * (cellHeight + gap));
-            tile.Size = new Vector2(cellWidth, cellHeight);
+            var rect = new Rect2(
+                padding + column * (cellWidth + gap),
+                padding + row * (cellHeight + gap),
+                cellWidth,
+                cellHeight);
+
+            var polygon = CreateDistrictPolygon(rect, districts[i].Id);
+            _shapes.Add(new MapDistrictShape(districts[i], polygon, rect));
         }
     }
 
-    private static StyleBoxFlat CreateTileStyle(District district)
+    private void DrawMapBackground()
+    {
+        DrawRect(new Rect2(Vector2.Zero, Size), UiTheme.MapLand);
+
+        var grass = new Color(UiTheme.MapGrass, 0.22f);
+        for (var i = 0; i < 18; i++)
+        {
+            var x = StableRange(i * 17 + 3, 0f, Size.X);
+            var y = StableRange(i * 19 + 7, 0f, Size.Y);
+            DrawCircle(new Vector2(x, y), StableRange(i * 23, 18f, 46f), grass);
+        }
+
+    }
+
+    private void DrawWaterGeography()
+    {
+        var water = GetWaterPolygon();
+        if (water.Length == 0) return;
+
+        DrawColoredPolygon(water, new Color(UiTheme.MapWater, 0.58f));
+        DrawPolyline(water.Append(water[0]).ToArray(), new Color(UiTheme.PanelAlt, 0.30f), 7f, true);
+        DrawPolyline(water.Append(water[0]).ToArray(), new Color(UiTheme.MapWater, 0.82f), 2.5f, true);
+    }
+
+    private Vector2[] GetWaterPolygon()
+    {
+        if (Size.X <= 260f || Size.Y <= 180f) return Array.Empty<Vector2>();
+
+        return new[]
+        {
+            new Vector2(Size.X * 0.83f, 0f),
+            new Vector2(Size.X, 0f),
+            new Vector2(Size.X, Size.Y * 0.17f),
+            new Vector2(Size.X * 0.94f, Size.Y * 0.20f),
+            new Vector2(Size.X * 0.90f, Size.Y * 0.36f),
+            new Vector2(Size.X * 0.96f, Size.Y * 0.54f),
+            new Vector2(Size.X, Size.Y),
+            new Vector2(Size.X * 0.84f, Size.Y),
+            new Vector2(Size.X * 0.76f, Size.Y * 0.76f),
+            new Vector2(Size.X * 0.82f, Size.Y * 0.54f),
+            new Vector2(Size.X * 0.77f, Size.Y * 0.24f)
+        };
+    }
+
+    private void DrawDistrict(MapDistrictShape shape)
+    {
+        var selected = _selectedDistrictId == shape.District.Id;
+        var hovered = _hoveredDistrictId == shape.District.Id;
+        var fill = DistrictFill(shape.District);
+        var border = selected ? UiTheme.Info : hovered ? UiTheme.Warning : UiTheme.Border;
+
+        DrawColoredPolygon(shape.Polygon, fill);
+        var outline = shape.Polygon.Append(shape.Polygon[0]).ToArray();
+        if (selected || hovered)
+        {
+            DrawPolyline(outline, new Color(border, 0.22f), selected ? 9f : 7f, true);
+        }
+
+        DrawPolyline(outline, new Color(UiTheme.MapRoadShadow, 0.18f), selected ? 5f : hovered ? 4f : 3f, true);
+        DrawPolyline(outline, border, selected ? 3.5f : hovered ? 3f : 2f, true);
+    }
+
+    private void DrawRoadNetwork()
+    {
+        if (_shapes.Count == 0) return;
+
+        foreach (var road in GetRegionalRoads())
+        {
+            DrawRoadSegment(road);
+        }
+    }
+
+    private void DrawRoadSegment(RoadSegment road)
+    {
+        DrawRoadSegment(road, _ => true, allowBridge: true);
+    }
+
+    private void DrawRoadSegment(RoadSegment road, Func<Vector2, bool> withinBounds, bool allowBridge)
+    {
+        var offset = new Vector2(2f, 2f);
+        DrawConditionedLine(
+            road.From + offset,
+            road.To + offset,
+            new Color(UiTheme.MapRoadShadow, 0.62f),
+            road.Width + 4f,
+            point => withinBounds(point - offset) && !PointInWater(point - offset));
+        DrawConditionedLine(road.From, road.To, UiTheme.MapRoad, road.Width + 1.5f, point => withinBounds(point) && !PointInWater(point));
+        DrawConditionedLine(
+            road.From,
+            road.To,
+            new Color(UiTheme.PanelAlt, 0.24f),
+            Math.Max(1.5f, road.Width * 0.28f),
+            point => withinBounds(point) && !PointInWater(point));
+
+        if (!allowBridge || PointInWater(road.From) || PointInWater(road.To)) return;
+
+        DrawConditionedLine(
+            road.From + offset,
+            road.To + offset,
+            new Color(UiTheme.MapBridgeShadow, 0.70f),
+            road.Width + 5f,
+            point => withinBounds(point - offset) && PointInWater(point - offset));
+        DrawConditionedLine(road.From, road.To, UiTheme.MapBridge, road.Width + 2f, point => withinBounds(point) && PointInWater(point));
+        DrawConditionedLine(
+            road.From,
+            road.To,
+            new Color(UiTheme.PanelAlt, 0.28f),
+            Math.Max(1.2f, road.Width * 0.25f),
+            point => withinBounds(point) && PointInWater(point));
+    }
+
+    private void DrawDistrictDetails(MapDistrictShape shape)
+    {
+        var roads = GetRoadsForDistrict(shape).ToList();
+        DrawLocalStreets(shape);
+        var projectObjects = DrawProjectObjects(shape, roads);
+        var buildings = DrawBuildings(shape, projectObjects, roads);
+        buildings.AddRange(projectObjects);
+        DrawTrees(shape, buildings);
+        DrawMarkers(shape);
+        DrawDistrictLabel(shape);
+    }
+
+    private void DrawLocalStreets(MapDistrictShape shape)
+    {
+        foreach (var street in GetLocalStreets(shape))
+        {
+            DrawRoadSegment(street, point => PointInPolygon(point, shape.Polygon), allowBridge: true);
+        }
+    }
+
+    private List<Rect2> DrawProjectObjects(MapDistrictShape shape, List<RoadSegment> roads)
+    {
+        var placed = new List<Rect2>();
+        if (_world == null) return placed;
+
+        var projects = _world.Projects
+            .Where(p => p.DistrictId == shape.District.Id)
+            .OrderBy(p => p.Completed)
+            .ThenBy(p => p.Id)
+            .ToList();
+        if (projects.Count == 0) return placed;
+
+        var index = 0;
+        foreach (var project in projects)
+        {
+            var rect = FindProjectRect(shape, project, roads, placed, index++);
+            if (rect == null) continue;
+
+            if (project.Completed)
+            {
+                DrawCompletedProject(project, rect.Value);
+            }
+            else
+            {
+                DrawConstructionProject(project, rect.Value);
+            }
+
+            placed.Add(rect.Value);
+        }
+
+        return placed;
+    }
+
+    private List<Rect2> DrawBuildings(MapDistrictShape shape, IReadOnlyList<Rect2> reserved, List<RoadSegment> roads)
+    {
+        var placed = reserved.ToList();
+        var businessObjects = DrawBusinessObjects(shape, placed, roads);
+        placed.AddRange(businessObjects);
+
+        var count = Math.Clamp(shape.District.Population + shape.District.TotalJobs + 8, 8, 24);
+        var attempts = count * 8;
+
+        var generatedBuildings = 0;
+        for (var i = 0; i < attempts && generatedBuildings < count; i++)
+        {
+            var seed = shape.District.Id * 97 + i * 17;
+
+            var size = new Vector2(
+                StableRange(seed + 1, 12f, 24f),
+                StableRange(seed + 2, 10f, 22f));
+            var rect = i < roads.Count * 3
+                ? RectNearRoad(roads, size, seed + 3)
+                : new Rect2(PointInBounds(shape.Bounds.Grow(-20f), seed + 3) - size * 0.5f, size);
+
+            if (!TryPrepareAccessibleRect(rect, shape, roads, placed, 5f)) continue;
+
+            var color = Color.FromHtml("#E6D7BD");
+            DrawRect(rect.Grow(1f), new Color(UiTheme.MapRoadShadow, 0.35f));
+            DrawRect(rect, color);
+            DrawRect(rect, new Color(UiTheme.Text, 0.18f), false, 1f);
+            DrawLine(rect.Position + new Vector2(2f, 3f), rect.End - new Vector2(2f, size.Y - 3f), new Color(UiTheme.PanelAlt, 0.42f), 1f);
+            placed.Add(rect);
+            generatedBuildings++;
+        }
+
+        return placed.Where(rect => !reserved.Contains(rect)).ToList();
+    }
+
+    private List<Rect2> DrawBusinessObjects(MapDistrictShape shape, IReadOnlyList<Rect2> reserved, List<RoadSegment> roads)
+    {
+        var placed = reserved.ToList();
+        var drawn = new List<Rect2>();
+        if (_world == null) return drawn;
+
+        var businesses = _world.Businesses
+            .Where(b => b.DistrictId == shape.District.Id && b.Status == BusinessStatus.Active)
+            .OrderByDescending(b => b.MaxEmployees)
+            .ThenBy(b => b.Id)
+            .Take(6)
+            .ToList();
+        if (businesses.Count == 0) return drawn;
+
+        for (var i = 0; i < businesses.Count; i++)
+        {
+            var business = businesses[i];
+            var size = BusinessFootprint(business);
+            Rect2? rect = null;
+            for (var attempt = 0; attempt < 32; attempt++)
+            {
+                var seed = shape.District.Id * 613 + business.Id * 41 + attempt * 17;
+                var candidate = attempt < roads.Count * 3
+                    ? RectNearRoad(roads, size, seed)
+                    : new Rect2(PointInBounds(shape.Bounds.Grow(-24f), seed) - size * 0.5f, size);
+                if (!TryPrepareAccessibleRect(candidate, shape, roads, placed, 8f)) continue;
+
+                rect = candidate;
+                break;
+            }
+
+            if (rect == null) continue;
+
+            DrawBusinessObject(business, rect.Value);
+            placed.Add(rect.Value);
+            drawn.Add(rect.Value);
+        }
+
+        return drawn;
+    }
+
+    private void DrawBusinessObject(Business business, Rect2 rect)
+    {
+        var color = BusinessColor(business);
+        DrawRect(rect.Grow(2f), new Color(UiTheme.MapRoadShadow, 0.34f));
+        DrawRect(rect, BusinessFill(business));
+        DrawRect(rect, color, false, 2f);
+
+        var icon = BusinessIcon(business);
+        DrawText(icon, rect.GetCenter() + new Vector2(-5f, 5f), icon == "+" ? 16 : 13, color);
+
+        if (IsIndustryBusiness(business))
+        {
+            DrawRect(new Rect2(rect.Position + new Vector2(rect.Size.X - 7f, 3f), new Vector2(4f, 9f)), new Color(color, 0.85f));
+            var puff = rect.Position + new Vector2(rect.Size.X - 5f, -2f);
+            DrawCircle(puff, 2.5f, new Color(UiTheme.TextWeak, 0.28f));
+        }
+        else if (IsFarmBusiness(business))
+        {
+            for (var i = 1; i < 4; i++)
+            {
+                var y = rect.Position.Y + i * rect.Size.Y / 4f;
+                DrawLine(new Vector2(rect.Position.X + 3f, y), new Vector2(rect.End.X - 3f, y), new Color(UiTheme.MapPark, 0.45f), 1f);
+            }
+        }
+    }
+
+    private Rect2? FindProjectRect(
+        MapDistrictShape shape,
+        GovernmentProject project,
+        List<RoadSegment> roads,
+        IReadOnlyList<Rect2> placed,
+        int index)
+    {
+        var baseSize = ProjectFootprint(project.Type, project.Completed);
+        for (var attempt = 0; attempt < 36; attempt++)
+        {
+            var seed = shape.District.Id * 811 + project.Id * 37 + index * 19 + attempt * 13;
+            var rect = attempt < roads.Count * 3
+                ? RectNearRoad(roads, baseSize, seed)
+                : new Rect2(PointInBounds(shape.Bounds.Grow(-24f), seed) - baseSize * 0.5f, baseSize);
+            if (TryPrepareAccessibleRect(rect, shape, roads, placed, 8f))
+            {
+                return rect;
+            }
+        }
+
+        var fallback = SafeMarkerPosition(shape, index);
+        var fallbackRect = new Rect2(fallback - baseSize * 0.5f, baseSize);
+        return TryPrepareAccessibleRect(fallbackRect, shape, roads, placed, 8f) ? fallbackRect : null;
+    }
+
+    private void DrawConstructionProject(GovernmentProject project, Rect2 rect)
+    {
+        var color = ProjectColor(project.Type);
+        var pulse = 0.65f + MathF.Sin((float)_animationTime * 4.0f + project.Id) * 0.12f;
+        DrawRect(rect.Grow(4f), new Color(color, 0.16f + pulse * 0.08f));
+        DrawRect(rect.Grow(1.5f), new Color(UiTheme.MapRoadShadow, 0.36f));
+        DrawRect(rect, UiTheme.BuildMenu);
+        DrawRect(rect, color, false, 2f);
+
+        var progress = project.DurationTicks <= 0
+            ? 0f
+            : Math.Clamp((project.DurationTicks - project.RemainingTicks) / (float)project.DurationTicks, 0f, 1f);
+        var progressRect = new Rect2(rect.Position + new Vector2(3f, rect.Size.Y - 6f), new Vector2((rect.Size.X - 6f) * progress, 3f));
+        DrawRect(new Rect2(rect.Position + new Vector2(3f, rect.Size.Y - 6f), new Vector2(rect.Size.X - 6f, 3f)), new Color(UiTheme.Button, 0.9f));
+        DrawRect(progressRect, color);
+
+        DrawLine(rect.Position + new Vector2(4f, 6f), rect.End - new Vector2(4f, rect.Size.Y - 6f), new Color(color, 0.65f), 1.5f);
+        DrawLine(new Vector2(rect.End.X - 5f, rect.Position.Y + 5f), new Vector2(rect.Position.X + 5f, rect.End.Y - 9f), new Color(color, 0.45f), 1.2f);
+        DrawText(ProjectIcon(project.Type), rect.GetCenter() + new Vector2(-4f, 5f), 12, color);
+    }
+
+    private void DrawCompletedProject(GovernmentProject project, Rect2 rect)
+    {
+        var color = ProjectColor(project.Type);
+        DrawRect(rect.Grow(2f), new Color(UiTheme.MapRoadShadow, 0.34f));
+        DrawRect(rect, ProjectFill(project.Type));
+        DrawRect(rect, color, false, 2f);
+
+        switch (project.Type)
+        {
+            case ProjectType.Park:
+                DrawCircle(rect.GetCenter(), Math.Min(rect.Size.X, rect.Size.Y) * 0.32f, UiTheme.MapPark);
+                DrawCircle(rect.GetCenter() + new Vector2(5f, -4f), 4f, new Color(UiTheme.MapGrass, 0.85f));
+                break;
+            case ProjectType.Road:
+                DrawLine(rect.Position + new Vector2(3f, rect.Size.Y * 0.5f), rect.End - new Vector2(3f, rect.Size.Y * 0.5f), UiTheme.MapRoadShadow, 4f, true);
+                DrawLine(rect.Position + new Vector2(3f, rect.Size.Y * 0.5f), rect.End - new Vector2(3f, rect.Size.Y * 0.5f), UiTheme.MapRoad, 2.5f, true);
+                break;
+            case ProjectType.Clinic:
+                DrawText("+", rect.GetCenter() + new Vector2(-5f, 5f), 16, UiTheme.Danger);
+                break;
+            case ProjectType.Police:
+                DrawText("P", rect.GetCenter() + new Vector2(-5f, 5f), 14, UiTheme.Info);
+                break;
+            default:
+                DrawText(ProjectIcon(project.Type), rect.GetCenter() + new Vector2(-5f, 5f), 13, color);
+                break;
+        }
+    }
+
+    private void DrawTrees(MapDistrictShape shape, IReadOnlyList<Rect2> buildings)
+    {
+        var roads = GetRoadsForDistrict(shape).ToList();
+        var count = Math.Clamp((int)(shape.District.ServiceLevel / 12f) + 4, 4, 12);
+        for (var i = 0; i < count; i++)
+        {
+            var pos = PointInBounds(shape.Bounds, shape.District.Id * 53 + i * 29);
+            if (!PointInPolygon(pos, shape.Polygon)) continue;
+            if (roads.Any(road => DistanceToSegment(pos, road.From, road.To) < road.Width + 7f)) continue;
+            if (buildings.Any(rect => rect.Grow(8f).HasPoint(pos))) continue;
+
+            DrawCircle(pos, StableRange(shape.District.Id * 59 + i * 7, 3f, 6f), UiTheme.MapPark);
+            DrawCircle(pos + new Vector2(1.5f, -1.5f), 2f, new Color(UiTheme.MapGrass, 0.7f));
+        }
+    }
+
+    private void DrawMarkers(MapDistrictShape shape)
+    {
+        var district = shape.District;
+        var markerIndex = 0;
+        var unresolvedDistrictEvents = GetUnresolvedDistrictEvents(district.Id).ToList();
+
+        if (district.HasActiveCrisis || district.CrisisRisk > 65f || unresolvedDistrictEvents.Any(e => e.Type == EventType.Crisis))
+        {
+            DrawMarker(SafeMarkerPosition(shape, markerIndex++), "!", UiTheme.Danger);
+        }
+
+        if (unresolvedDistrictEvents.Any(e => e.Type != EventType.Crisis))
+        {
+            DrawMarker(SafeMarkerPosition(shape, markerIndex++), "?", UiTheme.Warning);
+        }
+
+        if (district.ActiveProjects > 0)
+        {
+            DrawMarker(SafeMarkerPosition(shape, markerIndex++), "P", UiTheme.Info);
+        }
+
+        if (district.AvailableHousing <= 0)
+        {
+            DrawMarker(SafeMarkerPosition(shape, markerIndex), "H", UiTheme.Warning);
+        }
+    }
+
+    private void DrawMarker(Vector2 center, string text, Color color)
+    {
+        var pulse = 1f + MathF.Sin((float)_animationTime * 3.4f + text[0]) * 0.16f;
+        var radius = 9f * pulse;
+        DrawCircle(center, radius + 4f, new Color(color, 0.18f));
+        DrawCircle(center, radius, color);
+        DrawCircle(center, radius, new Color(UiTheme.Text, 0.22f), false, 1.5f);
+        DrawText(text, center + new Vector2(-4f, 5f), 12, UiTheme.PanelAlt);
+    }
+
+    private IEnumerable<GameEvent> GetUnresolvedDistrictEvents(int districtId)
+    {
+        if (_world == null) yield break;
+
+        foreach (var gameEvent in _world.Events)
+        {
+            if (gameEvent.IsResolved || !gameEvent.HasChoices) continue;
+            if (gameEvent.Choices.Any(choice => choice.DistrictId == districtId))
+            {
+                yield return gameEvent;
+            }
+        }
+    }
+
+    private static Vector2 SafeMarkerPosition(MapDistrictShape shape, int markerIndex)
+    {
+        var candidates = new[]
+        {
+            new Vector2(0.86f, 0.16f),
+            new Vector2(0.80f, 0.24f),
+            new Vector2(0.72f, 0.18f),
+            new Vector2(0.88f, 0.34f),
+            new Vector2(0.70f, 0.32f),
+            new Vector2(0.62f, 0.20f),
+            new Vector2(0.78f, 0.44f),
+            new Vector2(0.58f, 0.36f)
+        };
+
+        for (var i = 0; i < candidates.Length; i++)
+        {
+            var candidate = candidates[(markerIndex + i) % candidates.Length];
+            var point = shape.Bounds.Position + shape.Bounds.Size * candidate + new Vector2(0f, markerIndex * 20f);
+            if (CircleInsidePolygon(point, 12f, shape.Polygon))
+            {
+                return point;
+            }
+        }
+
+        return shape.Center;
+    }
+
+    private void DrawDistrictLabel(MapDistrictShape shape)
+    {
+        var pos = shape.Bounds.Position + new Vector2(12f, 22f);
+        var district = shape.District;
+        DrawRect(new Rect2(pos - new Vector2(7f, 17f), new Vector2(190f, 42f)), new Color(UiTheme.MapLand, 0.58f));
+        DrawText(district.Name, pos, 17, UiTheme.Text);
+        DrawText($"Pop {district.Population} | Support {FormatPercent(district.SupportRating)}", pos + new Vector2(0f, 19f), 12, UiTheme.TextMuted);
+    }
+
+    private void DrawText(string text, Vector2 position, int size, Color color)
+    {
+        DrawString(ThemeDB.FallbackFont, position, text, HorizontalAlignment.Left, -1f, size, color);
+    }
+
+    private MapDistrictShape? FindDistrictAt(Vector2 point)
+    {
+        return _shapes.LastOrDefault(shape => PointInPolygon(point, shape.Polygon));
+    }
+
+    private bool SelectDistrictAt(Vector2 point)
+    {
+        var shape = FindDistrictAt(point);
+        if (shape == null) return false;
+
+        _selectedDistrictId = shape.District.Id;
+        EmitSignal(SignalName.DistrictSelected, shape.District.Id);
+        QueueRedraw();
+        return true;
+    }
+
+    private static Vector2[] CreateDistrictPolygon(Rect2 rect, int seed)
+    {
+        var inset = Math.Min(rect.Size.X, rect.Size.Y) * 0.04f;
+        rect = rect.Grow(-inset);
+        var jitterX = Math.Min(28f, rect.Size.X * 0.08f);
+        var jitterY = Math.Min(24f, rect.Size.Y * 0.08f);
+
+        return new[]
+        {
+            new Vector2(rect.Position.X + StableRange(seed + 1, 0f, jitterX), rect.Position.Y + StableRange(seed + 2, 0f, jitterY)),
+            new Vector2(rect.Position.X + rect.Size.X * 0.48f + StableRange(seed + 3, -jitterX, jitterX), rect.Position.Y + StableRange(seed + 4, 0f, jitterY)),
+            new Vector2(rect.End.X - StableRange(seed + 5, 0f, jitterX), rect.Position.Y + rect.Size.Y * 0.08f + StableRange(seed + 6, -jitterY, jitterY)),
+            new Vector2(rect.End.X - StableRange(seed + 7, 0f, jitterX), rect.Position.Y + rect.Size.Y * 0.52f + StableRange(seed + 8, -jitterY, jitterY)),
+            new Vector2(rect.End.X - rect.Size.X * 0.08f + StableRange(seed + 9, -jitterX, 0f), rect.End.Y - StableRange(seed + 10, 0f, jitterY)),
+            new Vector2(rect.Position.X + rect.Size.X * 0.44f + StableRange(seed + 11, -jitterX, jitterX), rect.End.Y - StableRange(seed + 12, 0f, jitterY)),
+            new Vector2(rect.Position.X + StableRange(seed + 13, 0f, jitterX), rect.End.Y - rect.Size.Y * 0.08f + StableRange(seed + 14, -jitterY, jitterY)),
+            new Vector2(rect.Position.X + StableRange(seed + 15, 0f, jitterX), rect.Position.Y + rect.Size.Y * 0.48f + StableRange(seed + 16, -jitterY, jitterY))
+        };
+    }
+
+    private static Vector2 PointInBounds(Rect2 bounds, int seed)
+    {
+        return new Vector2(
+            StableRange(seed + 1, bounds.Position.X + 28f, bounds.End.X - 28f),
+            StableRange(seed + 2, bounds.Position.Y + 48f, bounds.End.Y - 26f));
+    }
+
+    private static Rect2 RectNearRoad(IReadOnlyList<RoadSegment> roads, Vector2 size, int seed)
+    {
+        if (roads.Count == 0) return new Rect2(Vector2.Zero, size);
+
+        var road = roads[Math.Abs(seed) % roads.Count];
+        var direction = road.To - road.From;
+        if (direction.LengthSquared() <= 0.001f) return new Rect2(road.From - size * 0.5f, size);
+
+        direction = direction.Normalized();
+        var normal = new Vector2(-direction.Y, direction.X);
+        var side = StableRange(seed + 3, 0f, 1f) < 0.5f ? -1f : 1f;
+        var t = StableRange(seed + 4, 0.10f, 0.90f);
+        var roadPoint = road.From.Lerp(road.To, t);
+        var offset = Math.Max(size.X, size.Y) * 0.5f + road.Width * 0.5f + 3f;
+        return new Rect2(roadPoint + normal * side * offset - size * 0.5f, size);
+    }
+
+    private IEnumerable<RoadSegment> GetRegionalRoads()
+    {
+        if (_shapes.Count == 0) yield break;
+
+        var ordered = _shapes
+            .OrderBy(shape => shape.Center.Y)
+            .ThenBy(shape => shape.Center.X)
+            .ToList();
+
+        if (ordered.Count <= 1) yield break;
+
+        for (var i = 0; i < ordered.Count - 1; i++)
+        {
+            var from = FindDistrictRoadGateway(ordered[i], ordered[i + 1].Center);
+            var to = FindDistrictRoadGateway(ordered[i + 1], ordered[i].Center);
+            if (from == null || to == null) continue;
+
+            foreach (var road in RouteRoad(from.Value, to.Value, 5.2f))
+            {
+                yield return road;
+            }
+        }
+    }
+
+    private IEnumerable<RoadSegment> RouteRoad(Vector2 from, Vector2 to, float width)
+    {
+        yield return new RoadSegment(from, to, width);
+    }
+
+    private Vector2? FindDistrictRoadGateway(MapDistrictShape shape, Vector2 target)
+    {
+        var localRoads = GetLocalStreets(shape)
+            .SelectMany(road => GetDrawableRoadSegments(road, point => PointInPolygon(point, shape.Polygon) && !PointInWater(point)))
+            .ToList();
+
+        if (localRoads.Count == 0) return null;
+
+        return localRoads
+            .Select(road => ClosestPointOnSegment(target, road.From, road.To))
+            .Where(point => PointInPolygon(point, shape.Polygon) && !PointInWater(point))
+            .OrderBy(point => point.DistanceSquaredTo(target))
+            .Cast<Vector2?>()
+            .FirstOrDefault();
+    }
+
+    private static IEnumerable<RoadSegment> GetLocalStreets(MapDistrictShape shape)
+    {
+        var bounds = shape.Bounds.Grow(-42f);
+        if (bounds.Size.X <= 90f || bounds.Size.Y <= 90f) yield break;
+
+        var mainY = bounds.Position.Y + bounds.Size.Y * StableRange(shape.District.Id + 21, 0.46f, 0.56f);
+        var mainX = bounds.Position.X + bounds.Size.X * StableRange(shape.District.Id + 31, 0.36f, 0.64f);
+        yield return new RoadSegment(new Vector2(bounds.Position.X, mainY), new Vector2(bounds.End.X, mainY), 3f);
+        yield return new RoadSegment(new Vector2(mainX, bounds.Position.Y), new Vector2(mainX, bounds.End.Y), 3f);
+
+        if (shape.District.Population + shape.District.TotalJobs < 34) yield break;
+
+        var branchY = bounds.Position.Y + bounds.Size.Y * StableRange(shape.District.Id + 41, 0.26f, 0.78f);
+        var branchStart = bounds.Position.X + bounds.Size.X * 0.12f;
+        var branchEnd = bounds.Position.X + bounds.Size.X * StableRange(shape.District.Id + 51, 0.58f, 0.82f);
+        yield return new RoadSegment(new Vector2(branchStart, branchY), new Vector2(branchEnd, branchY), 2.6f);
+    }
+
+    private IEnumerable<RoadSegment> GetRoadsForDistrict(MapDistrictShape shape)
+    {
+        foreach (var street in GetLocalStreets(shape))
+        {
+            foreach (var road in GetRoadSegmentsForNetwork(street, point => PointInPolygon(point, shape.Polygon)))
+            {
+                yield return road;
+            }
+        }
+
+        foreach (var road in GetRegionalRoads())
+        {
+            if (PointInPolygon(road.From, shape.Polygon) ||
+                PointInPolygon(road.To, shape.Polygon) ||
+                PointInPolygon(road.From.Lerp(road.To, 0.5f), shape.Polygon))
+            {
+                foreach (var visibleRoad in GetRoadSegmentsForNetwork(road, point => PointInPolygon(point, shape.Polygon)))
+                {
+                    yield return visibleRoad;
+                }
+            }
+        }
+    }
+
+    private bool TryPrepareAccessibleRect(
+        Rect2 rect,
+        MapDistrictShape shape,
+        List<RoadSegment> roads,
+        IReadOnlyList<Rect2> placed,
+        float clearance)
+    {
+        if (!CanOccupyRect(rect, shape.Polygon, roads, placed, clearance)) return false;
+        if (RectHasRoadAccess(rect, roads)) return true;
+        if (!TryBuildAccessRoute(rect, shape, roads, placed, out var connectors)) return false;
+
+        foreach (var connector in connectors)
+        {
+            roads.Add(connector);
+            DrawRoadSegment(connector, point => PointInPolygon(point, shape.Polygon), allowBridge: true);
+        }
+
+        return true;
+    }
+
+    private bool CanOccupyRect(
+        Rect2 rect,
+        IReadOnlyList<Vector2> polygon,
+        IReadOnlyList<RoadSegment> roads,
+        IReadOnlyList<Rect2> placed,
+        float clearance)
+    {
+        var protectedRect = rect.Grow(clearance);
+        if (!RectInsidePolygon(protectedRect, polygon)) return false;
+        if (RectIntersectsWater(protectedRect)) return false;
+        if (roads.Any(road => RoadIntersectsRect(road, rect.Grow(1.5f)))) return false;
+        if (placed.Any(existing => existing.Grow(clearance).Intersects(protectedRect))) return false;
+        return true;
+    }
+
+    private static bool RectHasRoadAccess(Rect2 rect, IReadOnlyList<RoadSegment> roads)
+    {
+        return roads.Any(road =>
+            !RoadIntersectsRect(road, rect.Grow(0.5f)) &&
+            RoadIntersectsRect(road, rect.Grow(road.Width * 0.5f + 4f)));
+    }
+
+    private bool TryBuildAccessRoute(
+        Rect2 rect,
+        MapDistrictShape shape,
+        IReadOnlyList<RoadSegment> roads,
+        IReadOnlyList<Rect2> placed,
+        out List<RoadSegment> connectors)
+    {
+        connectors = new List<RoadSegment>();
+        if (roads.Count == 0) return false;
+
+        var targetCenter = rect.GetCenter();
+        var nearest = roads
+            .Select(road => new
+            {
+                Road = road,
+                Point = ClosestPointOnSegment(targetCenter, road.From, road.To),
+                Distance = targetCenter.DistanceSquaredTo(ClosestPointOnSegment(targetCenter, road.From, road.To))
+            })
+            .Where(item => PointInPolygon(item.Point, shape.Polygon) && !PointInWater(item.Point))
+            .OrderBy(item => item.Distance)
+            .Take(5)
+            .ToList();
+
+        foreach (var candidate in nearest)
+        {
+            var rectAccess = RectAccessPoint(rect, candidate.Point);
+            var routes = new[]
+            {
+                new[] { candidate.Point, rectAccess },
+                new[] { candidate.Point, new Vector2(candidate.Point.X, rectAccess.Y), rectAccess },
+                new[] { candidate.Point, new Vector2(rectAccess.X, candidate.Point.Y), rectAccess }
+            };
+
+            foreach (var route in routes)
+            {
+                var segments = BuildRouteSegments(route, 2.4f);
+                if (segments.Count == 0) continue;
+                if (!segments.All(segment => IsValidAccessSegment(segment, shape.Polygon, placed))) continue;
+
+                connectors = segments;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static List<RoadSegment> BuildRouteSegments(IReadOnlyList<Vector2> points, float width)
+    {
+        var result = new List<RoadSegment>();
+        for (var i = 0; i < points.Count - 1; i++)
+        {
+            if (points[i].DistanceTo(points[i + 1]) > 4f)
+            {
+                result.Add(new RoadSegment(points[i], points[i + 1], width));
+            }
+        }
+
+        return result;
+    }
+
+    private bool IsValidAccessSegment(RoadSegment segment, IReadOnlyList<Vector2> polygon, IReadOnlyList<Rect2> placed)
+    {
+        var canBridge = !PointInWater(segment.From) && !PointInWater(segment.To);
+        for (var i = 0; i <= 14; i++)
+        {
+            var point = segment.From.Lerp(segment.To, i / 14f);
+            if (!PointInPolygon(point, polygon)) return false;
+            if (PointInWater(point) && !canBridge) return false;
+        }
+
+        return placed.All(existing => !SegmentIntersectsRect(segment.From, segment.To, existing.Grow(5f)));
+    }
+
+    private bool RectIntersectsWater(Rect2 rect)
+    {
+        var water = GetWaterPolygon();
+        if (water.Length == 0) return false;
+
+        var corners = new[]
+        {
+            rect.Position,
+            new Vector2(rect.End.X, rect.Position.Y),
+            rect.End,
+            new Vector2(rect.Position.X, rect.End.Y)
+        };
+        if (corners.Append(rect.GetCenter()).Any(point => PointInPolygon(point, water))) return true;
+        if (water.Any(rect.HasPoint)) return true;
+
+        for (var i = 0; i < corners.Length; i++)
+        {
+            var rectA = corners[i];
+            var rectB = corners[(i + 1) % corners.Length];
+            for (var j = 0; j < water.Length; j++)
+            {
+                if (SegmentsIntersect(rectA, rectB, water[j], water[(j + 1) % water.Length])) return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool PointInWater(Vector2 point)
+    {
+        var water = GetWaterPolygon();
+        return water.Length > 0 && PointInPolygon(point, water);
+    }
+
+    private static bool RectInsidePolygon(Rect2 rect, IReadOnlyList<Vector2> polygon)
+    {
+        var points = new[]
+        {
+            rect.Position,
+            new Vector2(rect.End.X, rect.Position.Y),
+            rect.End,
+            new Vector2(rect.Position.X, rect.End.Y),
+            rect.GetCenter()
+        };
+
+        return points.All(point => PointInPolygon(point, polygon));
+    }
+
+    private static bool CircleInsidePolygon(Vector2 center, float radius, IReadOnlyList<Vector2> polygon)
+    {
+        var points = new[]
+        {
+            center,
+            center + new Vector2(radius, 0f),
+            center + new Vector2(-radius, 0f),
+            center + new Vector2(0f, radius),
+            center + new Vector2(0f, -radius),
+            center + new Vector2(radius * 0.7f, radius * 0.7f),
+            center + new Vector2(-radius * 0.7f, radius * 0.7f),
+            center + new Vector2(radius * 0.7f, -radius * 0.7f),
+            center + new Vector2(-radius * 0.7f, -radius * 0.7f)
+        };
+
+        return points.All(point => PointInPolygon(point, polygon));
+    }
+
+    private static bool RoadIntersectsRect(RoadSegment road, Rect2 rect)
+    {
+        if (rect.HasPoint(road.From) || rect.HasPoint(road.To)) return true;
+
+        return SegmentIntersectsRect(road.From, road.To, rect) ||
+            DistanceToSegment(rect.GetCenter(), road.From, road.To) < Math.Max(rect.Size.X, rect.Size.Y) * 0.5f;
+    }
+
+    private static bool SegmentIntersectsRect(Vector2 from, Vector2 to, Rect2 rect)
+    {
+        if (rect.HasPoint(from) || rect.HasPoint(to)) return true;
+
+        var corners = new[]
+        {
+            rect.Position,
+            new Vector2(rect.End.X, rect.Position.Y),
+            rect.End,
+            new Vector2(rect.Position.X, rect.End.Y)
+        };
+
+        for (var i = 0; i < corners.Length; i++)
+        {
+            if (SegmentsIntersect(from, to, corners[i], corners[(i + 1) % corners.Length]))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool SegmentsIntersect(Vector2 a, Vector2 b, Vector2 c, Vector2 d)
+    {
+        static float Cross(Vector2 x, Vector2 y) => x.X * y.Y - x.Y * y.X;
+
+        var ab = b - a;
+        var ac = c - a;
+        var ad = d - a;
+        var cd = d - c;
+        var ca = a - c;
+        var cb = b - c;
+        return Cross(ab, ac) * Cross(ab, ad) <= 0f && Cross(cd, ca) * Cross(cd, cb) <= 0f;
+    }
+
+    private static float DistanceToSegment(Vector2 point, Vector2 from, Vector2 to)
+    {
+        return point.DistanceTo(ClosestPointOnSegment(point, from, to));
+    }
+
+    private static Vector2 ClosestPointOnSegment(Vector2 point, Vector2 from, Vector2 to)
+    {
+        var segment = to - from;
+        var lengthSquared = segment.LengthSquared();
+        if (lengthSquared <= 0.0001f) return from;
+
+        var t = Math.Clamp((point - from).Dot(segment) / lengthSquared, 0f, 1f);
+        return from + segment * t;
+    }
+
+    private static Vector2 RectAccessPoint(Rect2 rect, Vector2 roadPoint)
+    {
+        var center = rect.GetCenter();
+        var delta = roadPoint - center;
+        if (Math.Abs(delta.X) > Math.Abs(delta.Y))
+        {
+            var x = delta.X < 0f ? rect.Position.X : rect.End.X;
+            return new Vector2(x, Math.Clamp(roadPoint.Y, rect.Position.Y + 2f, rect.End.Y - 2f));
+        }
+
+        var y = delta.Y < 0f ? rect.Position.Y : rect.End.Y;
+        return new Vector2(Math.Clamp(roadPoint.X, rect.Position.X + 2f, rect.End.X - 2f), y);
+    }
+
+    private IEnumerable<RoadSegment> GetDrawableRoadSegments(RoadSegment road, Func<Vector2, bool> canDraw)
+    {
+        const int segments = 28;
+        Vector2? start = null;
+        var previous = road.From;
+        var previousInside = canDraw(previous);
+
+        for (var i = 1; i <= segments; i++)
+        {
+            var current = road.From.Lerp(road.To, i / (float)segments);
+            var currentInside = canDraw(current);
+            if (previousInside && currentInside)
+            {
+                start ??= previous;
+            }
+            else if (start.HasValue)
+            {
+                if (start.Value.DistanceTo(previous) > 3f)
+                {
+                    yield return new RoadSegment(start.Value, previous, road.Width);
+                }
+
+                start = null;
+            }
+
+            previous = current;
+            previousInside = currentInside;
+        }
+
+        if (start.HasValue && previousInside && start.Value.DistanceTo(previous) > 3f)
+        {
+            yield return new RoadSegment(start.Value, previous, road.Width);
+        }
+    }
+
+    private IEnumerable<RoadSegment> GetRoadSegmentsForNetwork(RoadSegment road, Func<Vector2, bool> inBounds)
+    {
+        foreach (var segment in GetDrawableRoadSegments(road, inBounds))
+        {
+            if (!PointInWater(segment.From) && !PointInWater(segment.To))
+            {
+                yield return segment;
+                continue;
+            }
+
+            foreach (var drySegment in GetDrawableRoadSegments(segment, point => inBounds(point) && !PointInWater(point)))
+            {
+                yield return drySegment;
+            }
+        }
+    }
+
+    private void DrawConditionedLine(Vector2 from, Vector2 to, Color color, float width, Func<Vector2, bool> canDraw)
+    {
+        const int segments = 28;
+        Vector2? start = null;
+        var previous = from;
+        var previousInside = canDraw(previous);
+
+        for (var i = 1; i <= segments; i++)
+        {
+            var current = from.Lerp(to, i / (float)segments);
+            var currentInside = canDraw(current);
+            if (previousInside && currentInside)
+            {
+                start ??= previous;
+            }
+            else if (start.HasValue)
+            {
+                DrawLine(start.Value, previous, color, width, true);
+                start = null;
+            }
+
+            previous = current;
+            previousInside = currentInside;
+        }
+
+        if (start.HasValue && previousInside)
+        {
+            DrawLine(start.Value, previous, color, width, true);
+        }
+    }
+
+    private static bool PointInPolygon(Vector2 point, IReadOnlyList<Vector2> polygon)
+    {
+        var inside = false;
+        for (int i = 0, j = polygon.Count - 1; i < polygon.Count; j = i++)
+        {
+            var pi = polygon[i];
+            var pj = polygon[j];
+            if (((pi.Y > point.Y) != (pj.Y > point.Y)) &&
+                point.X < (pj.X - pi.X) * (point.Y - pi.Y) / (pj.Y - pi.Y + 0.0001f) + pi.X)
+            {
+                inside = !inside;
+            }
+        }
+
+        return inside;
+    }
+
+    private static float StableRange(int seed, float min, float max)
+    {
+        var value = MathF.Sin(seed * 12.9898f) * 43758.5453f;
+        var normalized = value - MathF.Floor(value);
+        return min + (max - min) * normalized;
+    }
+
+    private static Color DistrictFill(District district)
     {
         var support = Math.Clamp(district.SupportRating / 100f, 0f, 1f);
         var safety = Math.Clamp(district.AverageSafetySatisfaction / 100f, 0f, 1f);
-        var economic = Math.Clamp(district.EconomicLevel / 100f, 0f, 1f);
-        var color = new Color(
-            0.20f + (1f - support) * 0.35f,
-            0.26f + support * 0.32f,
-            0.32f + safety * 0.22f,
-            1f);
-
-        var border = new Color(
-            0.28f + economic * 0.28f,
-            0.36f + support * 0.24f,
-            0.42f + safety * 0.24f,
-            1f);
-
-        var style = new StyleBoxFlat
+        var economy = Math.Clamp(district.EconomicLevel / 100f, 0f, 1f);
+        var baseColor = UiTheme.MapGrass.Lerp(UiTheme.Success, support * 0.35f);
+        var safetyTint = UiTheme.MapWater.Lerp(baseColor, 0.65f + safety * 0.25f);
+        var identityTint = (district.Id % 3) switch
         {
-            BgColor = color,
-            BorderColor = border
+            0 => Color.FromHtml("#A7B97F"),
+            1 => Color.FromHtml("#B6B982"),
+            _ => Color.FromHtml("#8FAE8D")
         };
-        style.SetBorderWidthAll(2);
-        style.SetCornerRadiusAll(4);
-        return style;
+        return safetyTint.Lerp(identityTint, 0.18f).Lerp(Color.FromHtml("#D29B5E"), economy * 0.10f);
+    }
+
+    private static Vector2 ProjectFootprint(ProjectType type, bool completed)
+    {
+        var size = type switch
+        {
+            ProjectType.Road => new Vector2(38f, 14f),
+            ProjectType.Clinic => new Vector2(28f, 24f),
+            ProjectType.School => new Vector2(34f, 24f),
+            ProjectType.Police => new Vector2(26f, 22f),
+            ProjectType.Housing => new Vector2(34f, 28f),
+            ProjectType.Park => new Vector2(32f, 26f),
+            _ => new Vector2(28f, 22f)
+        };
+
+        return completed ? size : size + new Vector2(4f, 4f);
+    }
+
+    private static Color ProjectColor(ProjectType type)
+    {
+        return type switch
+        {
+            ProjectType.Road => UiTheme.MapRoadShadow,
+            ProjectType.Clinic => UiTheme.Danger,
+            ProjectType.School => Color.FromHtml("#7D9BC2"),
+            ProjectType.Police => UiTheme.Info,
+            ProjectType.Housing => Color.FromHtml("#A7B97F"),
+            ProjectType.Park => UiTheme.MapPark,
+            _ => UiTheme.Warning
+        };
+    }
+
+    private static Color ProjectFill(ProjectType type)
+    {
+        return type switch
+        {
+            ProjectType.Park => new Color(UiTheme.MapGrass, 0.92f),
+            ProjectType.Road => new Color(UiTheme.MapRoad, 0.95f),
+            ProjectType.Clinic => Color.FromHtml("#E8C8BE"),
+            ProjectType.School => Color.FromHtml("#C9D8E6"),
+            ProjectType.Police => Color.FromHtml("#C6D2DE"),
+            ProjectType.Housing => Color.FromHtml("#DDE6C5"),
+            _ => UiTheme.BuildCard
+        };
+    }
+
+    private static Vector2 BusinessFootprint(Business business)
+    {
+        if (IsFarmBusiness(business)) return new Vector2(34f, 22f);
+        if (IsIndustryBusiness(business)) return new Vector2(32f, 26f);
+        if (IsClinicBusiness(business)) return new Vector2(28f, 24f);
+        if (IsShopBusiness(business)) return new Vector2(24f, 20f);
+        return new Vector2(24f, 20f);
+    }
+
+    private static Color BusinessColor(Business business)
+    {
+        if (IsFarmBusiness(business)) return UiTheme.MapPark;
+        if (IsIndustryBusiness(business)) return Color.FromHtml("#9B7A63");
+        if (IsClinicBusiness(business)) return UiTheme.Danger;
+        if (IsShopBusiness(business)) return Color.FromHtml("#D29B5E");
+        return UiTheme.Warning;
+    }
+
+    private static Color BusinessFill(Business business)
+    {
+        if (IsFarmBusiness(business)) return Color.FromHtml("#D8D6A3");
+        if (IsIndustryBusiness(business)) return Color.FromHtml("#C8B09A");
+        if (IsClinicBusiness(business)) return Color.FromHtml("#E8C8BE");
+        if (IsShopBusiness(business)) return Color.FromHtml("#E3C39B");
+        return Color.FromHtml("#E6D7BD");
+    }
+
+    private static string BusinessIcon(Business business)
+    {
+        if (IsFarmBusiness(business)) return "F";
+        if (IsIndustryBusiness(business)) return "W";
+        if (IsClinicBusiness(business)) return "+";
+        if (IsShopBusiness(business)) return "$";
+        return "B";
+    }
+
+    private static bool IsFarmBusiness(Business business)
+    {
+        return ContainsBusinessTerm(business, "farm") || ContainsBusinessTerm(business, "food");
+    }
+
+    private static bool IsIndustryBusiness(Business business)
+    {
+        return ContainsBusinessTerm(business, "factory")
+            || ContainsBusinessTerm(business, "workshop")
+            || ContainsBusinessTerm(business, "industry")
+            || ContainsBusinessTerm(business, "goods");
+    }
+
+    private static bool IsClinicBusiness(Business business)
+    {
+        return ContainsBusinessTerm(business, "clinic")
+            || ContainsBusinessTerm(business, "health")
+            || ContainsBusinessTerm(business, "medical");
+    }
+
+    private static bool IsShopBusiness(Business business)
+    {
+        return ContainsBusinessTerm(business, "shop")
+            || ContainsBusinessTerm(business, "trade")
+            || ContainsBusinessTerm(business, "store");
+    }
+
+    private static bool ContainsBusinessTerm(Business business, string term)
+    {
+        return business.Type.Contains(term, StringComparison.OrdinalIgnoreCase)
+            || business.ProductionType.Contains(term, StringComparison.OrdinalIgnoreCase)
+            || business.Name.Contains(term, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string ProjectIcon(ProjectType type)
+    {
+        return type switch
+        {
+            ProjectType.Road => "R",
+            ProjectType.Clinic => "+",
+            ProjectType.School => "S",
+            ProjectType.Police => "P",
+            ProjectType.Housing => "H",
+            ProjectType.Park => "G",
+            _ => "B"
+        };
     }
 
     private static string BuildTooltip(District district)
@@ -142,4 +1334,22 @@ public partial class DistrictMapView : Control
     {
         return value.ToString("F1", CultureInfo.InvariantCulture) + "%";
     }
+
+    private sealed class MapDistrictShape
+    {
+        public MapDistrictShape(District district, Vector2[] polygon, Rect2 bounds)
+        {
+            District = district;
+            Polygon = polygon;
+            Bounds = bounds;
+            Center = new Vector2(polygon.Average(v => v.X), polygon.Average(v => v.Y));
+        }
+
+        public District District { get; }
+        public Vector2[] Polygon { get; }
+        public Rect2 Bounds { get; }
+        public Vector2 Center { get; }
+    }
+
+    private readonly record struct RoadSegment(Vector2 From, Vector2 To, float Width);
 }

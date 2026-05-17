@@ -113,13 +113,17 @@ public class Citizen
         Mood += (Satisfaction - Mood) * 0.1f;
         Mood = Math.Clamp(Mood, 0f, 100f);
 
-        if (FoodSatisfaction < 30f)
+        if (FoodSatisfaction < 15f)
         {
-            Health -= 1f;
+            Health -= 0.01f;
+        }
+        else if (FoodSatisfaction < 30f)
+        {
+            Health -= 0.003f;
         }
         else if (FoodSatisfaction > 70f)
         {
-            Health += 0.5f;
+            Health += 0.001f;
         }
 
         Health = Math.Clamp(Health, 0f, 100f);

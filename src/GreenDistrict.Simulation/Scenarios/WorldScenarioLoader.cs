@@ -41,6 +41,7 @@ public static class WorldScenarioLoader
             BaseOperatingExpensePerTick = 25f,
             ProjectOperatingExpensePerTick = 5f,
             Seed = 0,
+            InitialPopulation = 50,
             Districts =
             {
                 new DistrictScenario { Id = 1, Name = "Central" },
@@ -53,9 +54,9 @@ public static class WorldScenarioLoader
                     Id = 1,
                     Name = "Central Farm",
                     Type = "farm",
-                    MaxEmployees = 2,
+                    MaxEmployees = 18,
                     DistrictId = 1,
-                    WagePerEmployee = 400f,
+                    WagePerEmployee = 35f,
                     ProductionType = "food",
                     BaseOutput = 2500f,
                     UnitPrice = 2f,
@@ -67,14 +68,42 @@ public static class WorldScenarioLoader
                     Id = 2,
                     Name = "Riverside Shop",
                     Type = "shop",
-                    MaxEmployees = 1,
+                    MaxEmployees = 14,
                     DistrictId = 2,
-                    WagePerEmployee = 500f,
+                    WagePerEmployee = 38f,
                     ProductionType = "trade",
                     BaseOutput = 300f,
                     UnitPrice = 5f,
                     DemandMultiplier = 0.9f,
                     Revenue = 3500f
+                },
+                new BusinessScenario
+                {
+                    Id = 3,
+                    Name = "Central Workshop",
+                    Type = "workshop",
+                    MaxEmployees = 12,
+                    DistrictId = 1,
+                    WagePerEmployee = 36f,
+                    ProductionType = "goods",
+                    BaseOutput = 650f,
+                    UnitPrice = 4f,
+                    DemandMultiplier = 0.8f,
+                    Revenue = 4200f
+                },
+                new BusinessScenario
+                {
+                    Id = 4,
+                    Name = "Riverside Clinic",
+                    Type = "clinic",
+                    MaxEmployees = 8,
+                    DistrictId = 2,
+                    WagePerEmployee = 42f,
+                    ProductionType = "services",
+                    BaseOutput = 220f,
+                    UnitPrice = 7f,
+                    DemandMultiplier = 0.75f,
+                    Revenue = 3600f
                 }
             },
             HousingUnits =
