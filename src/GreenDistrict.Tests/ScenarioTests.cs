@@ -17,7 +17,7 @@ public class ScenarioTests
 
         Assert.Equal(10000f, world.Budget);
         Assert.Equal(75f, world.SupportRating);
-        Assert.Equal(2, world.Districts.Count);
+        Assert.Single(world.Districts);
         Assert.Equal(4, world.Businesses.Count);
         Assert.Equal(50, world.Citizens.Count);
         Assert.True(world.Households.Count >= 12);
@@ -27,7 +27,9 @@ public class ScenarioTests
         Assert.Contains(world.Citizens, c => c.Name == "Maria Green" && c.EmploymentStatus == EmploymentStatus.Employed);
         Assert.Contains(world.Households, h => h.MemberCount == 3 && h.HousingCapacity == 4);
         Assert.Contains(world.HousingUnits, h => h.Id == 1 && h.IsOccupied);
-        Assert.Contains(world.Projects, p => p.Type == ProjectType.Park && p.DistrictId == 2);
+        Assert.All(world.Businesses, b => Assert.Equal(1, b.DistrictId));
+        Assert.All(world.Citizens, c => Assert.Equal(1, c.DistrictId));
+        Assert.Contains(world.Projects, p => p.Type == ProjectType.Park && p.DistrictId == 1);
     }
 
     [Fact]

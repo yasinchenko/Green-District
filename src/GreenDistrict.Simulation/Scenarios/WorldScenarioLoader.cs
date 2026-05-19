@@ -41,11 +41,11 @@ public static class WorldScenarioLoader
             BaseOperatingExpensePerTick = 25f,
             ProjectOperatingExpensePerTick = 5f,
             Seed = 0,
+            EconomicTickInterval = 1440,
             InitialPopulation = 50,
             Districts =
             {
-                new DistrictScenario { Id = 1, Name = "Central" },
-                new DistrictScenario { Id = 2, Name = "Riverside" }
+                new DistrictScenario { Id = 1, Name = "Central" }
             },
             Businesses =
             {
@@ -66,10 +66,10 @@ public static class WorldScenarioLoader
                 new BusinessScenario
                 {
                     Id = 2,
-                    Name = "Riverside Shop",
+                    Name = "Central Shop",
                     Type = "shop",
                     MaxEmployees = 14,
-                    DistrictId = 2,
+                    DistrictId = 1,
                     WagePerEmployee = 38f,
                     ProductionType = "trade",
                     BaseOutput = 300f,
@@ -94,10 +94,10 @@ public static class WorldScenarioLoader
                 new BusinessScenario
                 {
                     Id = 4,
-                    Name = "Riverside Clinic",
+                    Name = "Central Clinic",
                     Type = "clinic",
                     MaxEmployees = 8,
-                    DistrictId = 2,
+                    DistrictId = 1,
                     WagePerEmployee = 42f,
                     ProductionType = "services",
                     BaseOutput = 220f,
@@ -109,15 +109,15 @@ public static class WorldScenarioLoader
             HousingUnits =
             {
                 new HousingUnitScenario { Id = 1, DistrictId = 1, Capacity = 4, RentPerTick = 20f },
-                new HousingUnitScenario { Id = 2, DistrictId = 2, Capacity = 2, RentPerTick = 25f },
-                new HousingUnitScenario { Id = 3, DistrictId = 2, Capacity = 3, RentPerTick = 30f }
+                new HousingUnitScenario { Id = 2, DistrictId = 1, Capacity = 2, RentPerTick = 25f },
+                new HousingUnitScenario { Id = 3, DistrictId = 1, Capacity = 3, RentPerTick = 30f }
             },
             Citizens =
             {
                 new CitizenScenario { Name = "Maria Green", Age = 29, Profession = "Worker", Gender = "Female", DistrictId = 1, Job = "Central Farm" },
                 new CitizenScenario { Name = "Ivan Green", Age = 31, Profession = "Worker", Gender = "Male", DistrictId = 1, Job = "Central Farm" },
                 new CitizenScenario { Name = "Sofia Green", Age = 7, Profession = "Child", Gender = "Female", DistrictId = 1 },
-                new CitizenScenario { Name = "Anna River", Age = 35, Profession = "Trader", Gender = "Female", DistrictId = 2, Job = "Riverside Shop" }
+                new CitizenScenario { Name = "Anna Green", Age = 35, Profession = "Trader", Gender = "Female", DistrictId = 1, Job = "Central Shop" }
             },
             Households =
             {
@@ -131,11 +131,11 @@ public static class WorldScenarioLoader
                 },
                 new HouseholdScenario
                 {
-                    DistrictId = 2,
+                    DistrictId = 1,
                     HousingUnitId = 2,
                     HousingCapacity = 2,
                     RentPerTick = 25f,
-                    MemberNames = { "Anna River" }
+                    MemberNames = { "Anna Green" }
                 }
             },
             Projects =
@@ -143,9 +143,9 @@ public static class WorldScenarioLoader
                 new ProjectScenario
                 {
                     Id = 1,
-                    Name = "Riverside Park",
+                    Name = "Central Park",
                     Type = "Park",
-                    DistrictId = 2,
+                    DistrictId = 1,
                     RemainingTicks = 25,
                     StartTick = -1
                 }

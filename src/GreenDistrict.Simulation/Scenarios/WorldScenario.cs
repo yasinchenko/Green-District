@@ -13,6 +13,7 @@ public class WorldScenario
     public float ProjectOperatingExpensePerTick { get; set; }
     public int Seed { get; set; }
     public int? InitialPopulation { get; set; }
+    public int EconomicTickInterval { get; set; } = 1440;
     public int DemographyTicksPerYear { get; set; } = 1440 * 365;
     public float BirthRatePerPersonPerYear { get; set; } = 0.02f;
     public float BaseDeathRatePerPersonPerYear { get; set; } = 0.01f;
@@ -43,6 +44,7 @@ public class BusinessScenario
     public float BaseOutput { get; set; }
     public float UnitPrice { get; set; } = 1f;
     public float DemandMultiplier { get; set; } = 1f;
+    public float Cash { get; set; }
     public float Revenue { get; set; }
     public float Expenses { get; set; }
     public string Status { get; set; } = "Active";
@@ -56,6 +58,7 @@ public class CitizenScenario
     public string Gender { get; set; } = "Female";
     public int? DistrictId { get; set; }
     public string? Job { get; set; }
+    public float Cash { get; set; }
     public float Income { get; set; }
     public float Satisfaction { get; set; } = 50f;
     public float Mood { get; set; } = 50f;

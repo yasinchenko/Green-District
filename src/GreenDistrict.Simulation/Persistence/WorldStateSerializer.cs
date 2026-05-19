@@ -60,6 +60,7 @@ public static class WorldStateSerializer
             ProjectOperatingExpensePerTick = world.ProjectOperatingExpensePerTick,
             ElectionIntervalTicks = world.ElectionIntervalTicks,
             SimulationSeed = world.SimulationSeed,
+            EconomicTickInterval = world.EconomicTickInterval,
             DemographyTicksPerYear = world.DemographyTicksPerYear,
             BirthRatePerPersonPerYear = world.BirthRatePerPersonPerYear,
             BaseDeathRatePerPersonPerYear = world.BaseDeathRatePerPersonPerYear,
@@ -69,6 +70,16 @@ public static class WorldStateSerializer
             LastBusinessTaxCollected = world.LastBusinessTaxCollected,
             LastOperatingExpenses = world.LastOperatingExpenses,
             LastNetBudgetChange = world.LastNetBudgetChange,
+            LastSalesRevenueGenerated = world.LastSalesRevenueGenerated,
+            LastGrossWagesPaid = world.LastGrossWagesPaid,
+            LastNetWagesPaid = world.LastNetWagesPaid,
+            LastProjectSpending = world.LastProjectSpending,
+            LastProjectBenefits = world.LastProjectBenefits,
+            LastProjectRefunds = world.LastProjectRefunds,
+            LastConsumerSpending = world.LastConsumerSpending,
+            LastExternalInflow = world.LastExternalInflow,
+            LastExternalOutflow = world.LastExternalOutflow,
+            LastInternalTransfers = world.LastInternalTransfers,
             LastElectionTick = world.LastElectionTick,
             LastElectionSupport = world.LastElectionSupport,
             ElectionCount = world.ElectionCount,
@@ -97,6 +108,7 @@ public static class WorldStateSerializer
         };
         world.Clock.SetCurrentTick(save.CurrentTick);
         world.Clock.TimeScale = save.TimeScale;
+        world.ConfigureEconomicTickInterval(save.EconomicTickInterval);
         world.ConfigureDemography(
             save.SimulationSeed,
             save.DemographyTicksPerYear,
@@ -152,6 +164,7 @@ public static class WorldStateSerializer
                 HouseholdId = citizenSave.HouseholdId,
                 MotherId = citizenSave.MotherId,
                 FatherId = citizenSave.FatherId,
+                Cash = citizenSave.Cash > 0f ? citizenSave.Cash : citizenSave.Income,
                 Income = citizenSave.Income,
                 Satisfaction = citizenSave.Satisfaction,
                 Mood = citizenSave.Mood,
@@ -195,11 +208,22 @@ public static class WorldStateSerializer
                 BaseOutput = businessSave.BaseOutput,
                 UnitPrice = businessSave.UnitPrice,
                 DemandMultiplier = businessSave.DemandMultiplier,
+                BusinessLevel = Math.Clamp(businessSave.BusinessLevel <= 0 ? 1 : businessSave.BusinessLevel, 1, Business.MaxBusinessLevel),
+                ProductQuality = businessSave.ProductQuality <= 0f ? 1f : businessSave.ProductQuality,
+                InvestmentReserve = Math.Max(0f, businessSave.InvestmentReserve),
+                LastInvestment = Math.Max(0f, businessSave.LastInvestment),
+                Cash = businessSave.Cash > 0f ? businessSave.Cash : Math.Max(0f, businessSave.Revenue - businessSave.Expenses),
                 Revenue = businessSave.Revenue,
                 Expenses = businessSave.Expenses,
+                RevenueThisTick = businessSave.RevenueThisTick,
+                ExpensesThisTick = businessSave.ExpensesThisTick,
+                TotalRevenue = businessSave.TotalRevenue > 0f ? businessSave.TotalRevenue : businessSave.Revenue,
+                TotalExpenses = businessSave.TotalExpenses > 0f ? businessSave.TotalExpenses : businessSave.Expenses,
                 LastProducedUnits = businessSave.LastProducedUnits,
                 LastSoldUnits = businessSave.LastSoldUnits,
                 LastSalesRevenue = businessSave.LastSalesRevenue,
+                LastLocalSalesRevenue = businessSave.LastLocalSalesRevenue,
+                LastExternalSalesRevenue = businessSave.LastExternalSalesRevenue,
                 Status = businessSave.Status,
                 ConsecutiveLossTicks = businessSave.ConsecutiveLossTicks,
                 ClosedAtTick = businessSave.ClosedAtTick
@@ -249,6 +273,16 @@ public static class WorldStateSerializer
             save.LastBusinessTaxCollected,
             save.LastOperatingExpenses,
             save.LastNetBudgetChange,
+            save.LastSalesRevenueGenerated,
+            save.LastGrossWagesPaid,
+            save.LastNetWagesPaid,
+            save.LastProjectSpending,
+            save.LastProjectBenefits,
+            save.LastProjectRefunds,
+            save.LastConsumerSpending,
+            save.LastExternalInflow,
+            save.LastExternalOutflow,
+            save.LastInternalTransfers,
             save.LastElectionTick,
             save.LastElectionSupport,
             save.ElectionCount);
@@ -264,6 +298,7 @@ public static class WorldStateSerializer
         Profession = citizen.Profession,
         FamilyName = citizen.FamilyName,
         Job = citizen.Job,
+        Cash = citizen.Cash,
         Income = citizen.Income,
         Satisfaction = citizen.Satisfaction,
         Mood = citizen.Mood,
@@ -338,11 +373,22 @@ public static class WorldStateSerializer
         BaseOutput = business.BaseOutput,
         UnitPrice = business.UnitPrice,
         DemandMultiplier = business.DemandMultiplier,
+        BusinessLevel = business.BusinessLevel,
+        ProductQuality = business.ProductQuality,
+        InvestmentReserve = business.InvestmentReserve,
+        LastInvestment = business.LastInvestment,
+        Cash = business.Cash,
         Revenue = business.Revenue,
         Expenses = business.Expenses,
+        RevenueThisTick = business.RevenueThisTick,
+        ExpensesThisTick = business.ExpensesThisTick,
+        TotalRevenue = business.TotalRevenue,
+        TotalExpenses = business.TotalExpenses,
         LastProducedUnits = business.LastProducedUnits,
         LastSoldUnits = business.LastSoldUnits,
         LastSalesRevenue = business.LastSalesRevenue,
+        LastLocalSalesRevenue = business.LastLocalSalesRevenue,
+        LastExternalSalesRevenue = business.LastExternalSalesRevenue,
         Status = business.Status,
         ConsecutiveLossTicks = business.ConsecutiveLossTicks,
         ClosedAtTick = business.ClosedAtTick
@@ -426,6 +472,7 @@ public class WorldSave
     public float ProjectOperatingExpensePerTick { get; set; }
     public int ElectionIntervalTicks { get; set; }
     public int SimulationSeed { get; set; }
+    public int EconomicTickInterval { get; set; } = 1440;
     public int DemographyTicksPerYear { get; set; } = 1440 * 365;
     public float BirthRatePerPersonPerYear { get; set; } = 0.02f;
     public float BaseDeathRatePerPersonPerYear { get; set; } = 0.01f;
@@ -435,6 +482,16 @@ public class WorldSave
     public float LastBusinessTaxCollected { get; set; }
     public float LastOperatingExpenses { get; set; }
     public float LastNetBudgetChange { get; set; }
+    public float LastSalesRevenueGenerated { get; set; }
+    public float LastGrossWagesPaid { get; set; }
+    public float LastNetWagesPaid { get; set; }
+    public float LastProjectSpending { get; set; }
+    public float LastProjectBenefits { get; set; }
+    public float LastProjectRefunds { get; set; }
+    public float LastConsumerSpending { get; set; }
+    public float LastExternalInflow { get; set; }
+    public float LastExternalOutflow { get; set; }
+    public float LastInternalTransfers { get; set; }
     public long LastElectionTick { get; set; } = -1;
     public float LastElectionSupport { get; set; }
     public int ElectionCount { get; set; }
@@ -456,6 +513,7 @@ public class CitizenSave
     public string Profession { get; set; } = string.Empty;
     public string FamilyName { get; set; } = string.Empty;
     public string? Job { get; set; }
+    public float Cash { get; set; }
     public float Income { get; set; }
     public float Satisfaction { get; set; }
     public float Mood { get; set; }
@@ -530,11 +588,22 @@ public class BusinessSave
     public float BaseOutput { get; set; }
     public float UnitPrice { get; set; }
     public float DemandMultiplier { get; set; }
+    public int BusinessLevel { get; set; } = 1;
+    public float ProductQuality { get; set; } = 1f;
+    public float InvestmentReserve { get; set; }
+    public float LastInvestment { get; set; }
+    public float Cash { get; set; }
     public float Revenue { get; set; }
     public float Expenses { get; set; }
+    public float RevenueThisTick { get; set; }
+    public float ExpensesThisTick { get; set; }
+    public float TotalRevenue { get; set; }
+    public float TotalExpenses { get; set; }
     public float LastProducedUnits { get; set; }
     public float LastSoldUnits { get; set; }
     public float LastSalesRevenue { get; set; }
+    public float LastLocalSalesRevenue { get; set; }
+    public float LastExternalSalesRevenue { get; set; }
     public BusinessStatus Status { get; set; }
     public int ConsecutiveLossTicks { get; set; }
     public long? ClosedAtTick { get; set; }

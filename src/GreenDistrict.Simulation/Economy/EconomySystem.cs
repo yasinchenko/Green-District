@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using System.Collections.Generic;
 using GreenDistrict.Simulation.Core;
+using GreenDistrict.Simulation.Map;
 
 namespace GreenDistrict.Simulation.Economy;
 
@@ -12,6 +13,12 @@ public class EconomySystem
 {
     public const int MinimumWorkingAge = 18;
     public const int DefaultBankruptcyLossTicks = 3;
+    private const float FoodMaintenanceSpend = 0.8f;
+    private const float GoodsMaintenanceSpend = 0.35f;
+    private const float HealthcareMaintenanceSpend = 0.25f;
+    private const float NeedTarget = 88f;
+    private const float ExternalDemandShare = 0.45f;
+    private const float InvestmentProfitShare = 0.18f;
 
     private readonly float _taxRate;
 
@@ -43,19 +50,64 @@ public class EconomySystem
 
     public void ProcessProductionAndSales(WorldState world)
     {
+        ProcessProductionAndSales(world, accessibility: null);
+    }
+
+    public void ProcessProductionAndSales(WorldState world, MapAccessibilityReport? accessibility)
+    {
+        ProcessProduction(world, accessibility);
+        ProcessExternalSales(world);
+    }
+
+    public void ProcessProduction(WorldState world)
+    {
+        ProcessProduction(world, accessibility: null);
+    }
+
+    public void ProcessProduction(WorldState world, MapAccessibilityReport? accessibility)
+    {
         if (world == null) throw new ArgumentNullException(nameof(world));
 
         foreach (var business in world.Businesses.Where(b => b.Status == BusinessStatus.Active))
         {
-            var produced = business.BaseOutput * business.GetStaffingRatio();
-            var sold = produced * Math.Max(0f, business.DemandMultiplier);
-            var salesRevenue = sold * Math.Max(0f, business.UnitPrice);
+            business.ResetTickAccounting();
+            var accessible = accessibility?.IsBusinessAccessible(business.Id) ?? true;
+            var produced = accessible
+                ? business.BaseOutput * business.GetProductionMultiplier() * business.GetStaffingRatio()
+                : 0f;
 
             business.LastProducedUnits = produced;
-            business.LastSoldUnits = sold;
-            business.LastSalesRevenue = salesRevenue;
-            business.Revenue += salesRevenue;
         }
+    }
+
+    public float ProcessExternalSales(WorldState world)
+    {
+        if (world == null) throw new ArgumentNullException(nameof(world));
+
+        var totalSalesRevenue = 0f;
+        foreach (var business in world.Businesses.Where(b => b.Status == BusinessStatus.Active))
+        {
+            var remainingUnits = Math.Max(0f, business.LastProducedUnits - business.LastSoldUnits);
+            if (remainingUnits <= 0f || business.UnitPrice <= 0f) continue;
+
+            var externalDemandUnits = business.LastProducedUnits *
+                                      Math.Max(0f, business.DemandMultiplier) *
+                                      business.GetQualityDemandMultiplier() *
+                                      ExternalDemandShare;
+            var soldUnits = Math.Min(remainingUnits, externalDemandUnits);
+            var salesRevenue = soldUnits * Math.Max(0f, business.UnitPrice);
+            if (salesRevenue <= 0f) continue;
+
+            business.LastSoldUnits += soldUnits;
+            business.LastSalesRevenue += salesRevenue;
+            business.LastExternalSalesRevenue += salesRevenue;
+            business.RecordRevenue(salesRevenue);
+            totalSalesRevenue += salesRevenue;
+        }
+
+        world.LastSalesRevenueGenerated = totalSalesRevenue;
+        world.LastExternalInflow += totalSalesRevenue;
+        return totalSalesRevenue;
     }
 
     /// <summary>
@@ -107,9 +159,16 @@ public class EconomySystem
         world.LastBusinessTaxCollected = 0f;
         world.LastOperatingExpenses = 0f;
         world.LastNetBudgetChange = 0f;
+        world.LastGrossWagesPaid = 0f;
+        world.LastNetWagesPaid = 0f;
+        world.LastExternalInflow = 0f;
+        world.LastExternalOutflow = 0f;
+        world.LastInternalTransfers = 0f;
 
         var budgetBefore = world.Budget;
         var incomeTaxCollected = 0f;
+        var grossWagesPaid = 0f;
+        var netWagesPaid = 0f;
 
         foreach (var business in world.Businesses.Where(b => b.Status == BusinessStatus.Active))
         {
@@ -134,11 +193,13 @@ public class EconomySystem
                 var net = gross - tax;
 
                 // Business pays gross
-                business.Revenue -= gross;
-                business.Expenses += gross;
+                business.RecordExpense(gross);
 
                 // Citizen receives net to their Income
                 citizen.Income += net;
+                citizen.Cash += net;
+                grossWagesPaid += gross;
+                netWagesPaid += net;
 
                 // Government gets tax
                 world.Budget += tax;
@@ -147,6 +208,9 @@ public class EconomySystem
         }
 
         world.LastIncomeTaxCollected = incomeTaxCollected;
+        world.LastGrossWagesPaid = grossWagesPaid;
+        world.LastNetWagesPaid = netWagesPaid;
+        world.LastInternalTransfers += grossWagesPaid;
         world.LastNetBudgetChange += world.Budget - budgetBefore;
     }
 
@@ -160,20 +224,236 @@ public class EconomySystem
 
         foreach (var business in world.Businesses.Where(b => b.Status == BusinessStatus.Active))
         {
-            var taxableProfit = Math.Max(0f, business.GetProfit());
+            var hasTickAccounting = Math.Abs(business.RevenueThisTick) > 0.001f || Math.Abs(business.ExpensesThisTick) > 0.001f;
+            var taxableProfit = Math.Max(0f, hasTickAccounting ? business.ProfitThisTick : business.GetProfit());
             if (taxableProfit <= 0f) continue;
 
             var tax = taxableProfit * rate;
-            business.Revenue -= tax;
-            business.Expenses += tax;
+            business.RecordExpense(tax);
             world.Budget += tax;
             collected += tax;
         }
 
         world.LastBusinessTaxCollected = collected;
+        world.LastInternalTransfers += collected;
         world.LastNetBudgetChange += world.Budget - budgetBefore;
         return collected;
     }
+
+    public int ProcessBusinessInvestments(WorldState world)
+    {
+        if (world == null) throw new ArgumentNullException(nameof(world));
+
+        var upgrades = 0;
+        foreach (var business in world.Businesses.Where(b => b.Status == BusinessStatus.Active))
+        {
+            var investment = CalculateBusinessInvestment(business);
+            if (investment > 0f)
+            {
+                business.Invest(investment);
+            }
+
+            while (business.TryUpgrade())
+            {
+                upgrades++;
+            }
+        }
+
+        return upgrades;
+    }
+
+    private static float CalculateBusinessInvestment(Business business)
+    {
+        if (business.BusinessLevel >= Business.MaxBusinessLevel) return 0f;
+        if (business.ProfitThisTick <= 0f || business.Cash <= 0f) return 0f;
+
+        var payrollReserve = Math.Max(0f, business.WagePerEmployee) * Math.Max(1, business.EmployeeIds.Count);
+        var targetCashReserve = payrollReserve * 2f + Math.Max(250f, business.GetUpgradeCost() * 0.2f);
+        var investableCash = Math.Max(0f, business.Cash - targetCashReserve);
+        var plannedInvestment = Math.Max(0f, business.ProfitThisTick * InvestmentProfitShare);
+        return Math.Min(investableCash, plannedInvestment);
+    }
+
+    public float ProcessConsumerPurchases(WorldState world)
+    {
+        if (world == null) throw new ArgumentNullException(nameof(world));
+
+        var totalSpending = 0f;
+        foreach (var citizen in world.Citizens.Where(c => c.Cash > 0f))
+        {
+            totalSpending += PurchaseNeed(
+                world,
+                citizen,
+                FoodMaintenanceSpend,
+                citizen.FoodSatisfaction,
+                value => citizen.FoodSatisfaction = ClampSatisfaction(value),
+                spend => spend * 1.4f,
+                "food",
+                "farm",
+                "shop",
+                "trade");
+
+            totalSpending += PurchaseNeed(
+                world,
+                citizen,
+                GoodsMaintenanceSpend,
+                citizen.EntertainmentSatisfaction,
+                value => citizen.EntertainmentSatisfaction = ClampSatisfaction(value),
+                spend => spend * 0.8f,
+                "goods",
+                "workshop",
+                "shop",
+                "trade");
+
+            totalSpending += PurchaseNeed(
+                world,
+                citizen,
+                HealthcareMaintenanceSpend,
+                citizen.HealthcareSatisfaction,
+                value => citizen.HealthcareSatisfaction = ClampSatisfaction(value),
+                spend => spend * 0.9f,
+                "healthcare",
+                "clinic",
+                "services");
+
+            citizen.RecalculateSatisfaction();
+        }
+
+        world.LastConsumerSpending = totalSpending;
+        world.LastInternalTransfers += totalSpending;
+        return totalSpending;
+    }
+
+    public IReadOnlyList<ConsumerDemandSnapshot> EstimateConsumerDemand(WorldState world, int? districtId = null)
+    {
+        if (world == null) throw new ArgumentNullException(nameof(world));
+
+        return new[]
+        {
+            EstimateConsumerDemand(world, districtId, "food", FoodMaintenanceSpend, "food", "farm", "shop", "trade"),
+            EstimateConsumerDemand(world, districtId, "goods", GoodsMaintenanceSpend, "goods", "workshop", "shop", "trade"),
+            EstimateConsumerDemand(world, districtId, "healthcare", HealthcareMaintenanceSpend, "healthcare", "clinic", "services")
+        };
+    }
+
+    private static ConsumerDemandSnapshot EstimateConsumerDemand(
+        WorldState world,
+        int? districtId,
+        string category,
+        float maintenanceSpend,
+        params string[] providerTerms)
+    {
+        var citizens = world.Citizens
+            .Where(citizen => !districtId.HasValue || citizen.DistrictId == districtId)
+            .ToList();
+        var desiredSpending = citizens.Sum(citizen => CalculateDesiredNeedSpend(citizen, category, maintenanceSpend));
+        var availableCash = citizens.Sum(citizen => Math.Max(0f, citizen.Cash));
+        var providers = world.Businesses
+            .Where(business => business.Status == BusinessStatus.Active)
+            .Where(business => !districtId.HasValue || business.DistrictId == districtId)
+            .Where(business => MatchesAny(business, providerTerms))
+            .ToList();
+        var availableSupplyValue = providers.Sum(business =>
+            Math.Max(0f, business.LastProducedUnits - business.LastSoldUnits) * Math.Max(0f, business.UnitPrice));
+        var averageQuality = providers.Count == 0 ? 0f : providers.Average(provider => provider.GetQualityDemandMultiplier());
+        var achievableSpending = Math.Min(desiredSpending, Math.Min(availableCash, availableSupplyValue));
+        var unmetDemand = Math.Max(0f, desiredSpending - achievableSpending);
+
+        return new ConsumerDemandSnapshot(
+            category,
+            citizens.Count,
+            desiredSpending,
+            availableCash,
+            availableSupplyValue,
+            achievableSpending,
+            unmetDemand,
+            averageQuality);
+    }
+
+    private static float PurchaseNeed(
+        WorldState world,
+        Citizen citizen,
+        float maintenanceSpend,
+        float currentNeed,
+        Action<float> setNeed,
+        Func<float, float> satisfactionGain,
+        params string[] providerTerms)
+    {
+        var desiredSpend = CalculateDesiredNeedSpend(currentNeed, maintenanceSpend);
+        if (desiredSpend <= 0f || citizen.Cash <= 0f) return 0f;
+
+        var provider = FindConsumerProvider(world, citizen.DistrictId, providerTerms);
+        if (provider == null) return 0f;
+
+        var unitPrice = Math.Max(0.01f, provider.UnitPrice);
+        var remainingUnits = Math.Max(0f, provider.LastProducedUnits - provider.LastSoldUnits);
+        var availableValue = remainingUnits * unitPrice;
+        if (availableValue <= 0f) return 0f;
+
+        var spend = Math.Min(Math.Min(desiredSpend, citizen.Cash), availableValue);
+        if (spend <= 0f) return 0f;
+
+        var units = spend / unitPrice;
+        citizen.Cash -= spend;
+        provider.LastSoldUnits += units;
+        provider.LastSalesRevenue += spend;
+        provider.LastLocalSalesRevenue += spend;
+        provider.RecordRevenue(spend);
+        setNeed(currentNeed + satisfactionGain(spend));
+        return spend;
+    }
+
+    private static float CalculateDesiredNeedSpend(Citizen citizen, string category, float maintenanceSpend)
+    {
+        var need = category.ToLowerInvariant() switch
+        {
+            "food" => citizen.FoodSatisfaction,
+            "goods" => citizen.EntertainmentSatisfaction,
+            "healthcare" => citizen.HealthcareSatisfaction,
+            _ => citizen.Satisfaction
+        };
+
+        return CalculateDesiredNeedSpend(need, maintenanceSpend);
+    }
+
+    private static float CalculateDesiredNeedSpend(float currentNeed, float maintenanceSpend)
+    {
+        var needGap = Math.Max(0f, NeedTarget - currentNeed);
+        return maintenanceSpend + needGap * 0.035f;
+    }
+
+    private static Business? FindConsumerProvider(WorldState world, int? districtId, params string[] terms)
+    {
+        return world.Businesses
+            .Where(business => business.Status == BusinessStatus.Active)
+            .Where(business => MatchesAny(business, terms))
+            .Where(HasRemainingConsumerSupply)
+            .OrderByDescending(business => business.DistrictId == districtId)
+            .ThenByDescending(business => business.GetQualityDemandMultiplier())
+            .ThenBy(business => business.UnitPrice)
+            .FirstOrDefault();
+    }
+
+    private static bool HasRemainingConsumerSupply(Business business)
+    {
+        return business.LastProducedUnits > business.LastSoldUnits && business.UnitPrice > 0f;
+    }
+
+    private static bool MatchesAny(Business business, IEnumerable<string> terms)
+    {
+        return terms.Any(term =>
+            ContainsTerm(business.Type, term) ||
+            ContainsTerm(business.ProductionType, term) ||
+            ContainsTerm(business.Name, term));
+    }
+
+    private static bool ContainsTerm(string? value, string term)
+    {
+        return !string.IsNullOrWhiteSpace(value) &&
+               value.Contains(term, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static float ClampSatisfaction(float value) => Math.Clamp(value, 0f, 100f);
 
     public float ProcessGovernmentExpenses(WorldState world)
     {
@@ -186,6 +466,7 @@ public class EconomySystem
 
         world.Budget -= expenses;
         world.LastOperatingExpenses = expenses;
+        world.LastExternalOutflow += expenses;
         world.LastNetBudgetChange += world.Budget - budgetBefore;
         return expenses;
     }
@@ -251,7 +532,11 @@ public class EconomySystem
         citizen.Job = null;
     }
 
-    public int UpdateBusinessViability(WorldState world, float bankruptcyProfitThreshold = 0f, int lossTicksToBankruptcy = DefaultBankruptcyLossTicks)
+    public int UpdateBusinessViability(
+        WorldState world,
+        float bankruptcyProfitThreshold = 0f,
+        int lossTicksToBankruptcy = DefaultBankruptcyLossTicks,
+        MapAccessibilityReport? accessibility = null)
     {
         if (world == null) throw new ArgumentNullException(nameof(world));
         lossTicksToBankruptcy = Math.Max(1, lossTicksToBankruptcy);
@@ -259,7 +544,9 @@ public class EconomySystem
         var closed = 0;
         foreach (var business in world.Businesses.Where(b => b.Status == BusinessStatus.Active).ToList())
         {
-            if (business.GetProfit() < bankruptcyProfitThreshold)
+            var pressure = EvaluateBusinessPressure(world, business, bankruptcyProfitThreshold, accessibility);
+
+            if (pressure.IsUnderPressure)
             {
                 business.ConsecutiveLossTicks++;
             }
@@ -270,12 +557,50 @@ public class EconomySystem
 
             if (business.ConsecutiveLossTicks >= lossTicksToBankruptcy)
             {
-                CloseBusiness(world, business, BusinessStatus.Bankrupt);
+                CloseBusiness(world, business, BusinessStatus.Bankrupt, pressure.Reason);
                 closed++;
             }
         }
 
         return closed;
+    }
+
+    private static BusinessPressure EvaluateBusinessPressure(
+        WorldState world,
+        Business business,
+        float bankruptcyProfitThreshold,
+        MapAccessibilityReport? accessibility)
+    {
+        var hasTickAccounting = Math.Abs(business.RevenueThisTick) > 0.001f || Math.Abs(business.ExpensesThisTick) > 0.001f;
+        var payrollReserve = Math.Max(0f, business.WagePerEmployee) * Math.Max(1, business.EmployeeIds.Count);
+        var hasCumulativeLoss = business.GetProfit() < bankruptcyProfitThreshold;
+        var hasDebtPressure = business.Cash <= -payrollReserve;
+        var hasCashflowPressure = hasTickAccounting
+            ? hasDebtPressure || (business.ProfitThisTick < bankruptcyProfitThreshold && business.Cash < payrollReserve && hasCumulativeLoss)
+            : business.Cash <= bankruptcyProfitThreshold && hasCumulativeLoss;
+        if (hasCashflowPressure)
+        {
+            return new BusinessPressure(true, "cashflow");
+        }
+
+        if (accessibility != null && !accessibility.IsBusinessAccessible(business.Id))
+        {
+            return new BusinessPressure(true, "road access");
+        }
+
+        if (business.MaxEmployees > 0 && business.EmployeeIds.Count == 0 && world.Citizens.Any(IsAvailableForWork))
+        {
+            return new BusinessPressure(true, "staff shortage");
+        }
+
+        var hadProductionToSell = business.LastProducedUnits > 0.001f;
+        var hadSales = business.LastSoldUnits > 0.001f || business.RevenueThisTick > 0.001f;
+        if (hadProductionToSell && !hadSales)
+        {
+            return new BusinessPressure(true, "demand");
+        }
+
+        return new BusinessPressure(false, string.Empty);
     }
 
     public Business? TryOpenBusiness(
@@ -284,7 +609,8 @@ public class EconomySystem
         string typeId,
         int? districtId = null,
         float minimumBudget = 12000f,
-        float maximumUnemploymentRate = 20f)
+        float maximumUnemploymentRate = 20f,
+        float startingCash = 0f)
     {
         if (world == null) throw new ArgumentNullException(nameof(world));
         if (catalog == null) throw new ArgumentNullException(nameof(catalog));
@@ -302,11 +628,109 @@ public class EconomySystem
             BaseOutput = definition.BaseOutput,
             UnitPrice = definition.UnitPrice,
             DemandMultiplier = definition.DemandMultiplier,
+            Cash = Math.Max(0f, startingCash),
             Status = BusinessStatus.Active
         };
 
         world.Businesses.Add(business);
+        world.Events.Add(new GameEvent(
+            $"Business opened: {business.Name}",
+            $"Business {business.Name} opened to cover {definition.ProductionType} demand.",
+            EventType.Economic)
+        {
+            CreatedAtTick = world.Clock.CurrentTick
+        });
         return business;
+    }
+
+    public Business? TryOpenNeededBusiness(
+        WorldState world,
+        BusinessTypeCatalog catalog,
+        int? districtId = null,
+        BusinessOpeningRules? rules = null)
+    {
+        if (world == null) throw new ArgumentNullException(nameof(world));
+        if (catalog == null) throw new ArgumentNullException(nameof(catalog));
+
+        rules ??= BusinessOpeningRules.Default;
+        var candidate = catalog.Types
+            .Select(definition => new
+            {
+                Definition = definition,
+                DemandGap = EstimateDemandGap(world, definition, districtId)
+            })
+            .Where(candidate => candidate.DemandGap >= rules.MinimumDemandGap)
+            .OrderByDescending(candidate => candidate.DemandGap)
+            .FirstOrDefault(candidate => CanOpenBusiness(world, candidate.Definition, districtId, rules));
+
+        if (candidate == null) return null;
+
+        return TryOpenBusiness(
+            world,
+            catalog,
+            candidate.Definition.Id,
+            districtId,
+            rules.MinimumBudget,
+            rules.MaximumUnemploymentRate,
+            rules.StartingCash);
+    }
+
+    public float EstimateDemandGap(WorldState world, BusinessTypeDefinition definition, int? districtId = null)
+    {
+        if (world == null) throw new ArgumentNullException(nameof(world));
+        if (definition == null) throw new ArgumentNullException(nameof(definition));
+
+        var category = DemandCategoryForProductionType(definition.ProductionType);
+        var demand = EstimateConsumerDemand(world, districtId)
+            .FirstOrDefault(snapshot => string.Equals(snapshot.Category, category, StringComparison.OrdinalIgnoreCase));
+        if (demand == null || demand.Population == 0) return 0f;
+
+        var needGap = demand.Population <= 0
+            ? 0f
+            : Math.Clamp(demand.UnmetDemand / demand.Population * 20f, 0f, 100f);
+        var sameTypeBusinesses = CountActiveBusinessesForDefinition(world, definition, districtId);
+        var capacityCoverage = sameTypeBusinesses * 12f;
+        return Math.Clamp(needGap - capacityCoverage, 0f, 100f);
+    }
+
+    private bool CanOpenBusiness(
+        WorldState world,
+        BusinessTypeDefinition definition,
+        int? districtId,
+        BusinessOpeningRules rules)
+    {
+        if (world.Budget < rules.MinimumBudget) return false;
+        if (!rules.HasBuildableLocation) return false;
+        if (GetUnemploymentRate(world) > rules.MaximumUnemploymentRate) return false;
+        if (CountAvailableWorkers(world) < rules.MinimumAvailableWorkers) return false;
+        if (CountActiveBusinessesForDefinition(world, definition, districtId) >= rules.MaximumSameTypePerDistrict) return false;
+
+        return true;
+    }
+
+    private static int CountAvailableWorkers(WorldState world)
+    {
+        return world.Citizens.Count(IsAvailableForWork);
+    }
+
+    private static int CountActiveBusinessesForDefinition(WorldState world, BusinessTypeDefinition definition, int? districtId)
+    {
+        return world.Businesses.Count(business =>
+            business.Status == BusinessStatus.Active &&
+            (!districtId.HasValue || business.DistrictId == districtId) &&
+            (string.Equals(business.Type, definition.Id, StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(business.ProductionType, definition.ProductionType, StringComparison.OrdinalIgnoreCase)));
+    }
+
+    private static string DemandCategoryForProductionType(string productionType)
+    {
+        return productionType.ToLowerInvariant() switch
+        {
+            "food" => "food",
+            "healthcare" or "services" => "healthcare",
+            "goods" or "trade" => "goods",
+            _ => "goods"
+        };
     }
 
     public float GetUnemploymentRate(WorldState world)
@@ -318,7 +742,7 @@ public class EconomySystem
         return (unemployed / (float)laborForce.Count) * 100f;
     }
 
-    private static void CloseBusiness(WorldState world, Business business, BusinessStatus status)
+    private static void CloseBusiness(WorldState world, Business business, BusinessStatus status, string reason)
     {
         foreach (var empId in business.EmployeeIds.ToList())
         {
@@ -333,9 +757,10 @@ public class EconomySystem
         business.EmployeeCount = 0;
         business.Status = status;
         business.ClosedAtTick = world.Clock.CurrentTick;
+        var reasonText = string.IsNullOrWhiteSpace(reason) ? "sustained viability problem" : reason;
         world.Events.Add(new GameEvent(
             $"Business closed: {business.Name}",
-            $"Business {business.Name} closed with status {status}.",
+            $"Business {business.Name} closed with status {status} due to {reasonText}.",
             EventType.Economic)
         {
             CreatedAtTick = world.Clock.CurrentTick
@@ -348,3 +773,28 @@ public class EconomySystem
         return $"{baseName} {id}";
     }
 }
+
+public sealed class BusinessOpeningRules
+{
+    public static BusinessOpeningRules Default { get; } = new();
+
+    public float MinimumBudget { get; init; } = 12000f;
+    public float MaximumUnemploymentRate { get; init; } = 100f;
+    public int MinimumAvailableWorkers { get; init; } = 1;
+    public float MinimumDemandGap { get; init; } = 18f;
+    public int MaximumSameTypePerDistrict { get; init; } = 2;
+    public bool HasBuildableLocation { get; init; } = true;
+    public float StartingCash { get; init; } = 2500f;
+}
+
+public sealed record ConsumerDemandSnapshot(
+    string Category,
+    int Population,
+    float DesiredSpending,
+    float AvailableCash,
+    float AvailableSupplyValue,
+    float AchievableSpending,
+    float UnmetDemand,
+    float AverageQuality);
+
+internal readonly record struct BusinessPressure(bool IsUnderPressure, string Reason);

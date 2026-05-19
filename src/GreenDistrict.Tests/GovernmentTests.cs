@@ -19,6 +19,9 @@ public class GovernmentTests
         Assert.True(started);
         Assert.Contains(project, world.Projects);
         Assert.Equal(8000f, world.Budget); // 10000 - 2000
+        Assert.Equal(2000f, world.LastProjectSpending);
+        Assert.Equal(2000f, world.LastExternalOutflow);
+        Assert.Equal(-2000f, world.LastNetBudgetChange);
     }
 
     [Fact]
@@ -39,6 +42,9 @@ public class GovernmentTests
         govt.TickProjects(world);
         Assert.True(project.Completed);
         Assert.Equal(10000f - 1000f + 300f, world.Budget);
+        Assert.Equal(300f, world.LastProjectBenefits);
+        Assert.Equal(300f, world.LastExternalInflow);
+        Assert.Equal(-700f, world.LastNetBudgetChange);
         Assert.NotEmpty(world.Events);
     }
 
@@ -168,6 +174,11 @@ public class GovernmentTests
         var refund = govt.CancelProject(world, project.Id);
 
         Assert.Equal(250f, refund);
+        Assert.Equal(500f, world.LastProjectSpending);
+        Assert.Equal(250f, world.LastProjectRefunds);
+        Assert.Equal(250f, world.LastExternalInflow);
+        Assert.Equal(500f, world.LastExternalOutflow);
+        Assert.Equal(-250f, world.LastNetBudgetChange);
         Assert.DoesNotContain(project, world.Projects);
     }
 }

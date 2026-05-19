@@ -3,7 +3,9 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using GreenDistrict.Simulation.Core;
+using GreenDistrict.Simulation.Economy;
 using GreenDistrict.Simulation.Localization;
 using Godot;
 
@@ -12,6 +14,14 @@ namespace GreenDistrict.Godot.Scripts;
 public partial class MainDashboard : Control
 {
     private const double AutoTicksPerSecondAt1X = 1.0;
+    private const float CompactWidth = 1200f;
+    private static readonly Vector2I[] AvailableResolutions =
+    {
+        new(1152, 648),
+        new(1280, 720),
+        new(1600, 900),
+        new(1920, 1080)
+    };
 
     private readonly SimulationBridge _bridge = new();
     private readonly LocalizationSystem _localization = new();
@@ -23,6 +33,13 @@ public partial class MainDashboard : Control
     private string? _projectMessage;
     private string? _eventMessage;
     private string? _systemMessage;
+    private MainUiState _uiState = MainUiState.MainMenu;
+    private bool _hasActiveGame;
+    private bool _wasRunningBeforeMenu;
+    private ContextPanelMode _contextPanelMode = ContextPanelMode.Overview;
+    private bool _isContextPanelOpen;
+    private GameSettings _settings = GameSettings.Default();
+    private AnalyticsSnapshot? _previousAnalytics;
 
     private Control? _uiRoot;
     private TabContainer _tabs = null!;
@@ -32,22 +49,39 @@ public partial class MainDashboard : Control
     private Label _supportLabel = null!;
     private Label _satisfactionLabel = null!;
     private Label _unemploymentLabel = null!;
-    private Label _runStateLabel = null!;
     private Button _playPauseButton = null!;
+    private Button _speed1Button = null!;
+    private Button _speed5Button = null!;
+    private Button _speed20Button = null!;
     private Label _projectActionLabel = null!;
     private DistrictMapView _districtMap = null!;
     private VBoxContainer _contextList = null!;
     private VBoxContainer _projectList = null!;
     private VBoxContainer _diagnosticsList = null!;
-    private HBoxContainer _eventFeed = null!;
+    private bool _compactLayout;
 
     public override void _Ready()
     {
         AddChild(_bridge);
-        _bridge.ResetWorld();
         LoadLocalizationDictionaries();
+        LoadSettings();
+        _localization.SetLanguage(_settings.Language);
+        ApplySettings();
         BuildInterface();
-        Refresh();
+    }
+
+    public override void _Notification(int what)
+    {
+        if (what != NotificationResized || _uiRoot == null) return;
+
+        var nextCompact = GetViewportRect().Size.X <= CompactWidth;
+        if (nextCompact == _compactLayout) return;
+
+        BuildInterface();
+        if (_uiState is MainUiState.InGame or MainUiState.PausedMenu)
+        {
+            Refresh();
+        }
     }
 
     public override void _Process(double delta)
@@ -67,19 +101,45 @@ public partial class MainDashboard : Control
     {
         if (input is not InputEventKey { Pressed: true, Echo: false } key) return;
 
-        if (key.CtrlPressed && key.Keycode == Key.S)
+        if (_uiState == MainUiState.InGame && key.CtrlPressed && key.Keycode == Key.S)
         {
             SaveWorld();
             GetViewport().SetInputAsHandled();
             return;
         }
 
-        if (key.CtrlPressed && key.Keycode == Key.L)
+        if (_uiState == MainUiState.InGame && key.CtrlPressed && key.Keycode == Key.L)
         {
             LoadWorld();
             GetViewport().SetInputAsHandled();
             return;
         }
+
+        if (key.Keycode == Key.Escape)
+        {
+            if (_uiState == MainUiState.InGame)
+            {
+                if (_isContextPanelOpen)
+                {
+                    _isContextPanelOpen = false;
+                    BuildInterface();
+                    Refresh();
+                }
+                else
+                {
+                    OpenPausedMenu();
+                }
+            }
+            else if (_uiState is MainUiState.PausedMenu or MainUiState.Settings && _hasActiveGame)
+            {
+                ResumeGame();
+            }
+
+            GetViewport().SetInputAsHandled();
+            return;
+        }
+
+        if (_uiState != MainUiState.InGame) return;
 
         switch (key.Keycode)
         {
@@ -99,10 +159,6 @@ public partial class MainDashboard : Control
                 SetSpeed(20);
                 GetViewport().SetInputAsHandled();
                 break;
-            case Key.Escape:
-                ClearSelection();
-                GetViewport().SetInputAsHandled();
-                break;
             case Key.Tab:
                 CycleContextTab();
                 GetViewport().SetInputAsHandled();
@@ -113,6 +169,7 @@ public partial class MainDashboard : Control
     private void BuildInterface()
     {
         SetAnchorsPreset(LayoutPreset.FullRect);
+        _compactLayout = GetViewportRect().Size.X <= CompactWidth;
         if (_uiRoot != null)
         {
             RemoveChild(_uiRoot);
@@ -129,156 +186,327 @@ public partial class MainDashboard : Control
 
         var root = new MarginContainer();
         root.MouseFilter = MouseFilterEnum.Ignore;
-        root.AddThemeConstantOverride("margin_left", 12);
-        root.AddThemeConstantOverride("margin_top", 10);
-        root.AddThemeConstantOverride("margin_right", 12);
-        root.AddThemeConstantOverride("margin_bottom", 10);
+        root.AddThemeConstantOverride("margin_left", _compactLayout ? 8 : 12);
+        root.AddThemeConstantOverride("margin_top", _compactLayout ? 8 : 10);
+        root.AddThemeConstantOverride("margin_right", _compactLayout ? 8 : 12);
+        root.AddThemeConstantOverride("margin_bottom", _compactLayout ? 8 : 10);
         background.AddChild(root);
 
         var layout = new VBoxContainer();
         layout.MouseFilter = MouseFilterEnum.Ignore;
-        layout.AddThemeConstantOverride("separation", 10);
+        layout.AddThemeConstantOverride("separation", _compactLayout ? 7 : 10);
         root.AddChild(layout);
 
+        switch (_uiState)
+        {
+            case MainUiState.MainMenu:
+                BuildMainMenu(layout);
+                break;
+            case MainUiState.PausedMenu:
+                BuildGameInterface(layout);
+                BuildPauseOverlay(background);
+                break;
+            case MainUiState.Settings:
+                BuildSettingsMenu(layout);
+                break;
+            default:
+                BuildGameInterface(layout);
+                break;
+        }
+    }
+
+    private void BuildGameInterface(VBoxContainer layout)
+    {
         BuildHud(layout);
         BuildBody(layout);
-        BuildEventFeed(layout);
+    }
+
+    private void BuildMainMenu(VBoxContainer layout)
+    {
+        layout.Alignment = BoxContainer.AlignmentMode.Center;
+
+        var menuPanel = CreatePanel(UiTheme.Panel);
+        menuPanel.CustomMinimumSize = new Vector2(_compactLayout ? 360 : 420, 0);
+        menuPanel.SizeFlagsHorizontal = SizeFlags.ShrinkCenter;
+        layout.AddChild(menuPanel);
+
+        var menuRows = new VBoxContainer();
+        menuRows.MouseFilter = MouseFilterEnum.Ignore;
+        menuRows.AddThemeConstantOverride("separation", 10);
+        menuPanel.AddChild(menuRows);
+
+        var title = new Label
+        {
+            Text = T("ui.title"),
+            HorizontalAlignment = HorizontalAlignment.Center
+        };
+        UiTheme.ApplyLabel(title, 26);
+        menuRows.AddChild(title);
+
+        if (!string.IsNullOrWhiteSpace(_systemMessage))
+        {
+            menuRows.AddChild(CreateWrappedLabel(_systemMessage, UiTheme.Info));
+        }
+
+        menuRows.AddChild(CreateMenuButton(T("ui.new_game"), StartNewGame));
+
+        var loadButton = CreateMenuButton(T("ui.load_game"), LoadGameFromMenu);
+        loadButton.Disabled = !HasSaveFile();
+        menuRows.AddChild(loadButton);
+
+        var saveButton = CreateMenuButton(T("ui.save_game"), SaveGameFromMenu);
+        saveButton.Disabled = !_hasActiveGame;
+        menuRows.AddChild(saveButton);
+
+        menuRows.AddChild(CreateMenuButton(T("ui.settings"), OpenSettings));
+        menuRows.AddChild(CreateMenuButton(T("ui.exit"), ExitGame));
+        menuRows.AddChild(CreateMenuBottomPadding());
+
+        if (_uiState == MainUiState.PausedMenu)
+        {
+            menuRows.AddChild(CreateMenuButton(T("ui.resume"), ResumeGame));
+        }
+    }
+
+    private void BuildPauseOverlay(Control background)
+    {
+        var overlay = new PanelContainer
+        {
+            MouseFilter = MouseFilterEnum.Stop
+        };
+        overlay.SetAnchorsPreset(LayoutPreset.FullRect);
+        overlay.AddThemeStyleboxOverride(
+            "panel",
+            UiTheme.PanelStyle(new Color(UiTheme.Text, 0.20f), new Color(UiTheme.Text, 0f), 0, 0));
+        background.AddChild(overlay);
+
+        var center = new CenterContainer
+        {
+            MouseFilter = MouseFilterEnum.Ignore
+        };
+        center.SetAnchorsPreset(LayoutPreset.FullRect);
+        overlay.AddChild(center);
+
+        var menuPanel = CreatePanel(UiTheme.Panel);
+        menuPanel.CustomMinimumSize = new Vector2(_compactLayout ? 340 : 400, 0);
+        center.AddChild(menuPanel);
+
+        var rows = new VBoxContainer();
+        rows.MouseFilter = MouseFilterEnum.Ignore;
+        rows.AddThemeConstantOverride("separation", 10);
+        menuPanel.AddChild(rows);
+
+        var title = new Label
+        {
+            Text = T("ui.paused"),
+            HorizontalAlignment = HorizontalAlignment.Center
+        };
+        UiTheme.ApplyLabel(title, 24);
+        rows.AddChild(title);
+
+        if (!string.IsNullOrWhiteSpace(_systemMessage))
+        {
+            rows.AddChild(CreateWrappedLabel(_systemMessage, UiTheme.Info));
+        }
+
+        rows.AddChild(CreateMenuButton(T("ui.resume"), ResumeGame));
+        rows.AddChild(CreateMenuButton(T("ui.save_game"), SaveGameFromMenu));
+
+        var loadButton = CreateMenuButton(T("ui.load_game"), LoadGameFromMenu);
+        loadButton.Disabled = !HasSaveFile();
+        rows.AddChild(loadButton);
+
+        rows.AddChild(CreateMenuButton(T("ui.settings"), OpenSettings));
+        rows.AddChild(CreateMenuButton(T("ui.new_game"), StartNewGame));
+        rows.AddChild(CreateMenuButton(T("ui.exit"), ExitGame));
+        rows.AddChild(CreateMenuBottomPadding());
+    }
+
+    private void BuildSettingsMenu(VBoxContainer layout)
+    {
+        layout.Alignment = BoxContainer.AlignmentMode.Center;
+
+        var panel = CreatePanel(UiTheme.Panel);
+        panel.CustomMinimumSize = new Vector2(_compactLayout ? 380 : 460, 0);
+        panel.SizeFlagsHorizontal = SizeFlags.ShrinkCenter;
+        layout.AddChild(panel);
+
+        var rows = new VBoxContainer();
+        rows.MouseFilter = MouseFilterEnum.Ignore;
+        rows.AddThemeConstantOverride("separation", 10);
+        panel.AddChild(rows);
+
+        var title = new Label
+        {
+            Text = T("ui.settings"),
+            HorizontalAlignment = HorizontalAlignment.Center
+        };
+        UiTheme.ApplyLabel(title, 24);
+        rows.AddChild(title);
+
+        rows.AddChild(CreateSectionTitle(T("ui.language"), "L"));
+        var language = CreateLanguageSelector();
+        language.CustomMinimumSize = new Vector2(220, 34);
+        language.SizeFlagsHorizontal = SizeFlags.ShrinkCenter;
+        rows.AddChild(language);
+
+        rows.AddChild(CreateSectionTitle(T("ui.audio"), "A"));
+        rows.AddChild(CreateSettingsSlider(T("ui.master_volume"), _settings.MasterVolume, value =>
+        {
+            _settings.MasterVolume = value;
+            PersistAndApplySettings();
+        }));
+        rows.AddChild(CreateSettingsSlider(T("ui.music_volume"), _settings.MusicVolume, value =>
+        {
+            _settings.MusicVolume = value;
+            PersistAndApplySettings();
+        }));
+        rows.AddChild(CreateSettingsSlider(T("ui.effects_volume"), _settings.EffectsVolume, value =>
+        {
+            _settings.EffectsVolume = value;
+            PersistAndApplySettings();
+        }));
+
+        rows.AddChild(CreateSectionTitle(T("ui.display"), "D"));
+        rows.AddChild(CreateResolutionSelector());
+        rows.AddChild(CreateWindowModeSelector());
+        rows.AddChild(CreateMenuButton(T("ui.back"), _hasActiveGame ? ResumeGame : OpenMainMenu));
     }
 
     private void BuildHud(VBoxContainer layout)
     {
         var panel = CreatePanel(UiTheme.Hud);
-        panel.CustomMinimumSize = new Vector2(0, 58);
+        panel.CustomMinimumSize = new Vector2(0, _compactLayout ? 54 : 58);
         layout.AddChild(panel);
 
         var header = new HBoxContainer();
         header.MouseFilter = MouseFilterEnum.Ignore;
-        header.AddThemeConstantOverride("separation", 7);
+        header.AddThemeConstantOverride("separation", _compactLayout ? 5 : 7);
         panel.AddChild(header);
 
-        var titleBox = new VBoxContainer { CustomMinimumSize = new Vector2(108, 0) };
-        titleBox.MouseFilter = MouseFilterEnum.Ignore;
-        titleBox.AddThemeConstantOverride("separation", 0);
-        header.AddChild(titleBox);
-
-        var title = new Label { Text = T("ui.title"), ClipText = true, TextOverrunBehavior = TextServer.OverrunBehavior.TrimEllipsis };
-        UiTheme.ApplyLabel(title, 20);
-        titleBox.AddChild(title);
-
-        _runStateLabel = new Label();
-        UiTheme.ApplyLabel(_runStateLabel, 12, UiTheme.TextMuted);
-        titleBox.AddChild(_runStateLabel);
-
-        _budgetLabel = CreateMetricPill(header, "$", T("ui.budget"), 116, true, UiTheme.Success);
-        _populationLabel = CreateMetricPill(header, "P", T("ui.population"), 82, true, UiTheme.Info);
-        _supportLabel = CreateMetricPill(header, "%", T("ui.support"), 82, true, UiTheme.Trend);
-        _timeLabel = CreateMetricPill(header, "D", T("ui.time"), 92);
-        _satisfactionLabel = CreateMetricPill(header, "+", T("ui.satisfaction"), 66);
-        _unemploymentLabel = CreateMetricPill(header, "!", T("ui.unemployment"), 66);
+        _budgetLabel = CreateMetricPill(header, "$", T("ui.budget"), _compactLayout ? 104 : 116, true, UiTheme.Success);
+        _populationLabel = CreateMetricPill(header, "P", T("ui.population"), _compactLayout ? 74 : 82, true, UiTheme.Info);
+        _supportLabel = CreateMetricPill(header, "%", T("ui.support"), _compactLayout ? 74 : 82, true, UiTheme.Trend);
+        _timeLabel = CreateMetricPill(header, "D", T("ui.time"), _compactLayout ? 82 : 92);
+        _satisfactionLabel = CreateMetricPill(header, "+", T("ui.satisfaction"), _compactLayout ? 58 : 66);
+        _unemploymentLabel = CreateMetricPill(header, "!", T("ui.unemployment"), _compactLayout ? 58 : 66);
 
         header.AddChild(CreateSpacer());
 
         var controls = new HBoxContainer();
         controls.MouseFilter = MouseFilterEnum.Ignore;
-        controls.AddThemeConstantOverride("separation", 5);
+        controls.AddThemeConstantOverride("separation", _compactLayout ? 4 : 5);
         header.AddChild(controls);
-        _playPauseButton = CreateButton(">", ToggleAutoRun, 34, T("ui.play_pause"));
+        _playPauseButton = CreateButton(">", ToggleAutoRun, _compactLayout ? 32 : 34, T("ui.play_pause"));
         controls.AddChild(_playPauseButton);
-        controls.AddChild(CreateButton(T("ui.speed_1x"), () => SetSpeed(1), 42));
-        controls.AddChild(CreateButton(T("ui.speed_5x"), () => SetSpeed(5), 42));
-        controls.AddChild(CreateButton(T("ui.speed_20x"), () => SetSpeed(20), 48));
-        controls.AddChild(CreateButton(T("ui.one_day"), () => StepAndRefresh(1440), 54));
-
-        var language = CreateLanguageSelector();
-        language.CustomMinimumSize = new Vector2(72, 32);
-        header.AddChild(language);
-        header.AddChild(CreateButton("S", SaveWorld, 30, T("ui.save")));
-        header.AddChild(CreateButton("L", LoadWorld, 30, T("ui.load")));
-        header.AddChild(CreateButton(T("ui.reset"), ResetWorld, 54));
+        _speed1Button = CreateButton(T("ui.speed_1x"), () => SetSpeed(1), _compactLayout ? 34 : 38);
+        _speed5Button = CreateButton(T("ui.speed_5x"), () => SetSpeed(5), _compactLayout ? 34 : 38);
+        _speed20Button = CreateButton(T("ui.speed_20x"), () => SetSpeed(20), _compactLayout ? 40 : 44);
+        controls.AddChild(_speed1Button);
+        controls.AddChild(_speed5Button);
+        controls.AddChild(_speed20Button);
+        controls.AddChild(CreateButton(T("ui.one_day"), () => StepAndRefresh(1440), _compactLayout ? 50 : 54));
+        header.AddChild(CreateButton("M", OpenPausedMenu, _compactLayout ? 32 : 34, T("ui.menu")));
     }
 
     private void BuildBody(VBoxContainer layout)
     {
-        var body = new HBoxContainer
+        var body = new Control
         {
             MouseFilter = MouseFilterEnum.Ignore,
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
-            SizeFlagsVertical = SizeFlags.ExpandFill
+            SizeFlagsVertical = SizeFlags.ExpandFill,
+            ClipContents = true,
+            CustomMinimumSize = new Vector2(0, 240)
         };
-        body.AddThemeConstantOverride("separation", 10);
         layout.AddChild(body);
-
-        var mapPanel = CreatePanel(UiTheme.Panel);
-        mapPanel.SizeFlagsHorizontal = SizeFlags.ExpandFill;
-        mapPanel.SizeFlagsVertical = SizeFlags.ExpandFill;
-        mapPanel.SizeFlagsStretchRatio = 0.68f;
-        body.AddChild(mapPanel);
-
-        var mapRows = new VBoxContainer();
-        mapRows.MouseFilter = MouseFilterEnum.Ignore;
-        mapRows.AddThemeConstantOverride("separation", 8);
-        mapPanel.AddChild(mapRows);
-        mapRows.AddChild(CreateSectionTitle(T("ui.city_map"), "M"));
 
         _districtMap = new DistrictMapView
         {
-            CustomMinimumSize = new Vector2(520, 260),
+            MouseFilter = MouseFilterEnum.Stop,
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
             SizeFlagsVertical = SizeFlags.ExpandFill
         };
+        _districtMap.SetAnchorsPreset(LayoutPreset.FullRect);
         _districtMap.DistrictSelected += districtId =>
         {
             _selectedDistrictId = districtId;
             _selectedEventId = null;
             _eventMessage = null;
+            _contextPanelMode = ContextPanelMode.Overview;
+            _isContextPanelOpen = true;
+            BuildInterface();
             Refresh();
         };
-        mapRows.AddChild(_districtMap);
+        body.AddChild(_districtMap);
+
+        BuildContextOverlay(body);
+    }
+
+    private void BuildContextOverlay(Control body)
+    {
+        var panelWidth = _compactLayout ? 300f : 330f;
+        var buttonWidth = 38f;
+        var buttonGap = 6f;
+
+        var sideButtons = new VBoxContainer
+        {
+            MouseFilter = MouseFilterEnum.Stop
+        };
+        sideButtons.AnchorLeft = 1f;
+        sideButtons.AnchorRight = 1f;
+        sideButtons.AnchorTop = 0.5f;
+        sideButtons.AnchorBottom = 0.5f;
+        sideButtons.OffsetLeft = _isContextPanelOpen ? -panelWidth - buttonWidth - buttonGap : -buttonWidth - buttonGap;
+        sideButtons.OffsetRight = _isContextPanelOpen ? -panelWidth - buttonGap : -buttonGap;
+        sideButtons.OffsetTop = -68f;
+        sideButtons.OffsetBottom = 68f;
+        sideButtons.AddThemeConstantOverride("separation", 6);
+        body.AddChild(sideButtons);
+        sideButtons.AddChild(CreateContextModeButton("O", T("ui.overview"), ContextPanelMode.Overview));
+        sideButtons.AddChild(CreateContextModeButton("P", T("ui.projects"), ContextPanelMode.Projects));
+        sideButtons.AddChild(CreateContextModeButton("D", T("ui.diagnostics_short"), ContextPanelMode.Diagnostics));
 
         var rightPanel = CreatePanel(UiTheme.Panel);
-        rightPanel.CustomMinimumSize = new Vector2(330, 0);
-        rightPanel.SizeFlagsVertical = SizeFlags.ExpandFill;
+        rightPanel.Visible = _isContextPanelOpen;
+        rightPanel.MouseFilter = MouseFilterEnum.Stop;
+        rightPanel.AnchorLeft = 1f;
+        rightPanel.AnchorRight = 1f;
+        rightPanel.AnchorTop = 0f;
+        rightPanel.AnchorBottom = 1f;
+        rightPanel.OffsetLeft = -panelWidth;
+        rightPanel.OffsetRight = 0f;
+        rightPanel.OffsetTop = 0f;
+        rightPanel.OffsetBottom = 0f;
         body.AddChild(rightPanel);
 
         var rightRows = new VBoxContainer();
         rightRows.MouseFilter = MouseFilterEnum.Ignore;
         rightRows.AddThemeConstantOverride("separation", 8);
         rightPanel.AddChild(rightRows);
-        rightRows.AddChild(CreateSectionTitle(T("ui.context"), "I"));
+
+        var panelHeader = new HBoxContainer();
+        panelHeader.MouseFilter = MouseFilterEnum.Ignore;
+        panelHeader.AddThemeConstantOverride("separation", 6);
+        rightRows.AddChild(panelHeader);
+        var title = CreateSectionTitle(T("ui.context"), "I");
+        title.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+        panelHeader.AddChild(title);
+        panelHeader.AddChild(CreateButton("X", CloseContextPanel, 28, T("ui.close")));
 
         _tabs = new TabContainer
         {
             SizeFlagsHorizontal = SizeFlags.ExpandFill,
             SizeFlagsVertical = SizeFlags.ExpandFill
         };
+        _tabs.TabsVisible = false;
         UiTheme.ApplyTabs(_tabs);
         rightRows.AddChild(_tabs);
 
         _contextList = CreateTabList(_tabs, T("ui.overview"));
         _projectList = CreateTabList(_tabs, T("ui.projects"));
         _diagnosticsList = CreateTabList(_tabs, T("ui.diagnostics_short"));
-    }
-
-    private void BuildEventFeed(VBoxContainer layout)
-    {
-        var panel = CreatePanel(UiTheme.Event);
-        panel.CustomMinimumSize = new Vector2(0, 86);
-        layout.AddChild(panel);
-
-        var rows = new VBoxContainer();
-        rows.MouseFilter = MouseFilterEnum.Ignore;
-        rows.AddThemeConstantOverride("separation", 6);
-        panel.AddChild(rows);
-        rows.AddChild(CreateSectionTitle(T("ui.recent_events"), "!"));
-
-        _eventFeed = new HBoxContainer
-        {
-            MouseFilter = MouseFilterEnum.Ignore,
-            SizeFlagsHorizontal = SizeFlags.ExpandFill,
-            SizeFlagsVertical = SizeFlags.ExpandFill
-        };
-        _eventFeed.AddThemeConstantOverride("separation", 8);
-        rows.AddChild(_eventFeed);
+        _tabs.CurrentTab = (int)_contextPanelMode;
     }
 
     private OptionButton CreateLanguageSelector()
@@ -286,16 +514,115 @@ public partial class MainDashboard : Control
         var language = new OptionButton();
         language.AddItem("EN", (int)GameLanguage.English);
         language.AddItem("RU", (int)GameLanguage.Russian);
-        language.Select(_localization.CurrentLanguage == GameLanguage.Russian ? 1 : 0);
+        language.Select(_settings.Language == GameLanguage.Russian ? 1 : 0);
         language.ItemSelected += index =>
         {
             var selected = (GameLanguage)language.GetItemId((int)index);
+            _settings.Language = selected;
             _localization.SetLanguage(selected);
+            SaveSettings();
             BuildInterface();
-            Refresh();
+            if (_uiState == MainUiState.InGame)
+            {
+                Refresh();
+            }
         };
         UiTheme.ApplyButton(language);
         return language;
+    }
+
+    private Control CreateSettingsSlider(string title, float value, Action<float> changed)
+    {
+        var rows = new VBoxContainer();
+        rows.MouseFilter = MouseFilterEnum.Ignore;
+        rows.AddThemeConstantOverride("separation", 3);
+
+        var label = new Label { Text = $"{title}: {(int)Math.Round(value * 100f)}%" };
+        UiTheme.ApplyLabel(label, 12, UiTheme.TextMuted);
+        rows.AddChild(label);
+
+        var slider = new HSlider
+        {
+            MinValue = 0,
+            MaxValue = 100,
+            Step = 1,
+            Value = Math.Round(value * 100f),
+            SizeFlagsHorizontal = SizeFlags.ExpandFill
+        };
+        slider.ValueChanged += raw =>
+        {
+            var next = (float)(raw / 100.0);
+            label.Text = $"{title}: {(int)Math.Round(raw)}%";
+            changed(next);
+        };
+        rows.AddChild(slider);
+        return rows;
+    }
+
+    private Control CreateResolutionSelector()
+    {
+        var row = new HBoxContainer();
+        row.MouseFilter = MouseFilterEnum.Ignore;
+        row.AddThemeConstantOverride("separation", 8);
+        row.AddChild(CreateSettingsLabel(T("ui.resolution")));
+
+        var selector = new OptionButton
+        {
+            SizeFlagsHorizontal = SizeFlags.ExpandFill
+        };
+        for (var i = 0; i < AvailableResolutions.Length; i++)
+        {
+            var resolution = AvailableResolutions[i];
+            selector.AddItem($"{resolution.X}x{resolution.Y}", i);
+        }
+
+        selector.Select(Math.Clamp(_settings.ResolutionIndex, 0, AvailableResolutions.Length - 1));
+        selector.ItemSelected += index =>
+        {
+            _settings.ResolutionIndex = (int)selector.GetItemId((int)index);
+            PersistAndApplySettings();
+        };
+        UiTheme.ApplyButton(selector);
+        row.AddChild(selector);
+        return row;
+    }
+
+    private Control CreateWindowModeSelector()
+    {
+        var row = new HBoxContainer();
+        row.MouseFilter = MouseFilterEnum.Ignore;
+        row.AddThemeConstantOverride("separation", 8);
+        row.AddChild(CreateSettingsLabel(T("ui.window_mode")));
+
+        var selector = new OptionButton
+        {
+            SizeFlagsHorizontal = SizeFlags.ExpandFill
+        };
+        selector.AddItem(T("ui.windowed"), (int)WindowModeSetting.Windowed);
+        selector.AddItem(T("ui.fullscreen"), (int)WindowModeSetting.Fullscreen);
+        selector.Select(_settings.WindowMode == WindowModeSetting.Fullscreen ? 1 : 0);
+        selector.ItemSelected += index =>
+        {
+            _settings.WindowMode = (WindowModeSetting)selector.GetItemId((int)index);
+            PersistAndApplySettings();
+        };
+        UiTheme.ApplyButton(selector);
+        row.AddChild(selector);
+        return row;
+    }
+
+    private static Label CreateSettingsLabel(string text)
+    {
+        var label = new Label
+        {
+            Text = text,
+            CustomMinimumSize = new Vector2(120, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            ClipText = true,
+            TextOverrunBehavior = TextServer.OverrunBehavior.TrimEllipsis
+        };
+        UiTheme.ApplyLabel(label, 12, UiTheme.TextMuted);
+        return label;
     }
 
     private void ToggleAutoRun()
@@ -326,13 +653,89 @@ public partial class MainDashboard : Control
         _projectMessage = null;
         _eventMessage = null;
         _systemMessage = null;
+        _previousAnalytics = null;
         _bridge.ResetWorld();
         Refresh();
+    }
+
+    private void StartNewGame()
+    {
+        _isRunning = false;
+        _autoTickAccumulator = 0;
+        _selectedDistrictId = null;
+        _selectedEventId = null;
+        _projectMessage = null;
+        _eventMessage = null;
+        _systemMessage = null;
+        _previousAnalytics = null;
+        _bridge.ResetWorld();
+        _hasActiveGame = true;
+        _uiState = MainUiState.InGame;
+        BuildInterface();
+        Refresh();
+    }
+
+    private void OpenMainMenu()
+    {
+        _isRunning = false;
+        _uiState = MainUiState.MainMenu;
+        BuildInterface();
+    }
+
+    private void OpenPausedMenu()
+    {
+        _wasRunningBeforeMenu = _isRunning;
+        _isRunning = false;
+        _uiState = MainUiState.PausedMenu;
+        BuildInterface();
+        Refresh();
+    }
+
+    private void ResumeGame()
+    {
+        if (!_hasActiveGame)
+        {
+            OpenMainMenu();
+            return;
+        }
+
+        _uiState = MainUiState.InGame;
+        _isRunning = _wasRunningBeforeMenu;
+        BuildInterface();
+        Refresh();
+    }
+
+    private void OpenSettings()
+    {
+        if (_uiState == MainUiState.InGame)
+        {
+            _wasRunningBeforeMenu = _isRunning;
+            _isRunning = false;
+        }
+
+        _uiState = MainUiState.Settings;
+        BuildInterface();
+    }
+
+    private void SaveGameFromMenu()
+    {
+        SaveWorld();
+    }
+
+    private void LoadGameFromMenu()
+    {
+        LoadWorld();
+    }
+
+    private void ExitGame()
+    {
+        GetTree().Quit();
     }
 
     private void Refresh()
     {
         var world = _bridge.World;
+        NormalizeSelection(world);
         _timeLabel.Text = $"D{world.Clock.Day} {world.Clock.GetTimeString()}";
         _timeLabel.TooltipText = Tf("ui.day_time", world.Clock.Day, world.Clock.GetTimeString());
         _budgetLabel.Text = FormatMoney(world.Budget);
@@ -349,21 +752,55 @@ public partial class MainDashboard : Control
         RefreshRunState();
         _districtMap.SetWorld(world);
         _districtMap.SetSelectedDistrict(_selectedDistrictId);
+        _districtMap.SetSelectedEvent(_selectedEventId);
         RebuildContext(world);
         RebuildProjects(world);
         RebuildDiagnostics(world);
-        RebuildEventFeed(world);
+    }
+
+    private void NormalizeSelection(WorldState world)
+    {
+        if (_selectedDistrictId.HasValue && world.Districts.All(district => district.Id != _selectedDistrictId.Value))
+        {
+            _selectedDistrictId = null;
+        }
+
+        if (_selectedEventId.HasValue && world.Events.All(gameEvent => gameEvent.Id != _selectedEventId.Value))
+        {
+            _selectedEventId = null;
+        }
     }
 
     private void RefreshRunState()
     {
-        _runStateLabel.Text = _isRunning
-            ? $"{T("ui.running")} {_speedMultiplier}x"
-            : $"{T("ui.paused")} {_speedMultiplier}x";
         if (_playPauseButton != null)
         {
             _playPauseButton.Text = _isRunning ? "||" : ">";
+            _playPauseButton.TooltipText = _isRunning
+                ? $"{T("ui.running")} {_speedMultiplier}x"
+                : $"{T("ui.paused")} {_speedMultiplier}x";
         }
+
+        ApplySpeedButtonState(_speed1Button, _speedMultiplier == 1);
+        ApplySpeedButtonState(_speed5Button, _speedMultiplier == 5);
+        ApplySpeedButtonState(_speed20Button, _speedMultiplier == 20);
+    }
+
+    private static void ApplySpeedButtonState(Button? button, bool active)
+    {
+        if (button == null) return;
+
+        button.AddThemeStyleboxOverride(
+            "normal",
+            active
+                ? UiTheme.PanelStyle(UiTheme.ButtonPressed, UiTheme.Info, 5, 2)
+                : UiTheme.ButtonStyle(UiTheme.Button));
+        button.AddThemeStyleboxOverride(
+            "hover",
+            active
+                ? UiTheme.PanelStyle(UiTheme.ButtonPressed, UiTheme.Info, 5, 2)
+                : UiTheme.ButtonStyle(UiTheme.ButtonHover));
+        button.AddThemeColorOverride("font_color", active ? UiTheme.Text : UiTheme.TextMuted);
     }
 
     private void RebuildContext(WorldState world)
@@ -488,6 +925,12 @@ public partial class MainDashboard : Control
             return;
         }
 
+        if (gameEvent.IsResolved)
+        {
+            AddResolvedEventResult(_contextList, gameEvent);
+            return;
+        }
+
         var choiceRows = AddPanelRows(_contextList, T("ui.event_choices"), "!");
         foreach (var choice in gameEvent.Choices)
         {
@@ -516,59 +959,155 @@ public partial class MainDashboard : Control
 
             choiceContent.AddChild(CreateWrappedLabel(ChoiceEffectsText(choice), UiTheme.TextMuted));
             var button = CreateButton(T("ui.apply_choice"), () => ResolveSelectedEventChoice(gameEvent.Id, choice.Id), 104);
-            button.Disabled = gameEvent.IsResolved || world.Budget + choice.BudgetEffect < 0f;
+            button.Disabled = world.Budget + choice.BudgetEffect < 0f;
             choiceContent.AddChild(button);
         }
+    }
+
+    private void AddResolvedEventResult(Container parent, GameEvent gameEvent)
+    {
+        var rows = AddPanelRows(parent, T("ui.event_result"), "O");
+        var selectedChoice = gameEvent.Choices.FirstOrDefault(choice => choice.Id == gameEvent.SelectedChoiceId);
+        if (selectedChoice == null)
+        {
+            rows.AddChild(CreateWrappedLabel(T("ui.event_resolved_no_choice"), UiTheme.TextMuted));
+            return;
+        }
+
+        rows.AddChild(CreateStatRow(T("ui.selected_response"), selectedChoice.Label, UiTheme.Success));
+        if (!string.IsNullOrWhiteSpace(selectedChoice.Description))
+        {
+            rows.AddChild(CreateWrappedLabel(selectedChoice.Description, UiTheme.TextMuted));
+        }
+
+        rows.AddChild(CreateWrappedLabel(ChoiceEffectsText(selectedChoice), UiTheme.TextMuted));
+        rows.AddChild(CreateWrappedLabel(T("ui.event_no_more_choices"), UiTheme.Success));
     }
 
     private void RebuildDiagnostics(WorldState world)
     {
         ClearChildren(_diagnosticsList);
+        var previous = _previousAnalytics;
+        var analytics = AnalyticsSnapshot.FromWorld(world);
 
-        var districtRows = AddPanelRows(_diagnosticsList, T("ui.districts"), "D");
-        foreach (var district in world.Districts.OrderBy(d => d.Id))
+        var peopleRows = AddPanelRows(_diagnosticsList, T("ui.analytics_people"), "P");
+        peopleRows.AddChild(CreateStatRow(T("ui.population"), analytics.Population.ToString(CultureInfo.InvariantCulture)));
+        peopleRows.AddChild(CreateStatRow(T("ui.analytics_households"), analytics.Households.ToString(CultureInfo.InvariantCulture)));
+        peopleRows.AddChild(CreateStatRow(T("ui.analytics_employed"), $"{analytics.Employed}/{analytics.Workforce}"));
+        peopleRows.AddChild(CreateStatRow(T("ui.analytics_unemployed"), analytics.Unemployed.ToString(CultureInfo.InvariantCulture), analytics.Unemployed > 0 ? UiTheme.Warning : UiTheme.Text));
+        peopleRows.AddChild(CreateStatRow(T("ui.analytics_students_retired"), $"{analytics.Students}/{analytics.Retired}"));
+
+        var businessRows = AddPanelRows(_diagnosticsList, T("ui.analytics_business"), "B");
+        businessRows.AddChild(CreateStatRow(T("ui.active"), $"{analytics.ActiveBusinesses}/{analytics.Businesses}"));
+        businessRows.AddChild(CreateStatRow(T("ui.jobs"), $"{analytics.FilledJobs}/{analytics.JobCapacity}"));
+        businessRows.AddChild(CreateStatRow(T("ui.analytics_revenue"), FormatMoney(analytics.BusinessRevenue)));
+        businessRows.AddChild(CreateStatRow(T("ui.analytics_expenses"), FormatMoney(analytics.BusinessExpenses)));
+        businessRows.AddChild(CreateStatRow(T("ui.analytics_profit"), FormatSignedMoney(analytics.BusinessProfit), analytics.BusinessProfit < 0f ? UiTheme.Danger : UiTheme.Success));
+        businessRows.AddChild(CreateStatRow(T("ui.analytics_avg_level"), analytics.AverageBusinessLevel.ToString("F1", CultureInfo.InvariantCulture)));
+        businessRows.AddChild(CreateStatRow(T("ui.analytics_avg_quality"), analytics.AverageProductQuality.ToString("F2", CultureInfo.InvariantCulture)));
+        businessRows.AddChild(CreateStatRow(T("ui.analytics_investment"), FormatMoney(analytics.LastBusinessInvestment)));
+
+        var businessHealthRows = AddPanelRows(_diagnosticsList, T("ui.analytics_business_health"), "B");
+        if (analytics.BusinessHealth.Count == 0)
         {
-            districtRows.AddChild(CreateWrappedLabel(Tf("ui.district_summary", district.Population, FormatPercent(district.SupportRating))));
+            businessHealthRows.AddChild(CreateWrappedLabel(T("ui.analytics_no_business_health"), UiTheme.TextMuted));
+        }
+        else
+        {
+            foreach (var business in analytics.BusinessHealth)
+            {
+                var color = business.ClosureRisk >= 70f
+                    ? UiTheme.Danger
+                    : business.ClosureRisk >= 40f
+                        ? UiTheme.Warning
+                        : UiTheme.Success;
+                var row = CreateStatRow(business.Name, FormatPercent(business.ClosureRisk), color);
+                row.TooltipText = Tf(
+                    "ui.analytics_business_health_tooltip",
+                    business.Status,
+                    business.BusinessLevel.ToString(CultureInfo.InvariantCulture),
+                    business.ProductQuality.ToString("F2", CultureInfo.InvariantCulture),
+                    FormatMoney(business.Cash),
+                    $"{business.LastProducedUnits:F1}/{business.ProductionCapacity:F1}",
+                    FormatMoney(business.LastLocalSalesRevenue),
+                    FormatMoney(business.LastExternalSalesRevenue),
+                    business.ConsecutiveLossTicks.ToString(CultureInfo.InvariantCulture));
+                businessHealthRows.AddChild(row);
+            }
         }
 
-        var businessRows = AddPanelRows(_diagnosticsList, T("ui.businesses"), "B");
-        businessRows.AddChild(CreateStatRow(T("ui.active"), $"{world.Businesses.Count(b => b.Status == BusinessStatus.Active)}/{world.Businesses.Count}"));
-        foreach (var business in world.Businesses.OrderBy(b => b.Id).Take(6))
-        {
-            businessRows.AddChild(CreateWrappedLabel($"{business.Name}: {BusinessStatusLabel(business.Status)}", UiTheme.TextMuted));
-        }
+        var governmentRows = AddPanelRows(_diagnosticsList, T("ui.analytics_government"), "$");
+        governmentRows.AddChild(CreateStatRow(T("ui.budget"), FormatMoney(analytics.Budget), analytics.Budget < 0f ? UiTheme.Danger : UiTheme.Text));
+        governmentRows.AddChild(CreateStatRow(T("ui.analytics_net_budget"), FormatSignedMoney(analytics.NetBudgetChange), analytics.NetBudgetChange < 0f ? UiTheme.Warning : UiTheme.Success));
+        governmentRows.AddChild(CreateStatRow(T("ui.analytics_income_tax"), FormatMoney(analytics.IncomeTax)));
+        governmentRows.AddChild(CreateStatRow(T("ui.analytics_business_tax"), FormatMoney(analytics.BusinessTax)));
+        governmentRows.AddChild(CreateStatRow(T("ui.analytics_operating_expenses"), FormatMoney(analytics.OperatingExpenses)));
+        governmentRows.AddChild(CreateStatRow(T("ui.analytics_projects"), $"{analytics.ActiveProjects}/{analytics.CompletedProjects}"));
 
-        var citizenRows = AddPanelRows(_diagnosticsList, T("ui.citizens"), "P");
-        citizenRows.AddChild(CreateWrappedLabel(Tf("ui.showing_citizens", Math.Min(8, world.Citizens.Count), world.Citizens.Count), UiTheme.TextMuted));
-        foreach (var citizen in world.Citizens.OrderBy(c => c.Name).Take(8))
-        {
-            citizenRows.AddChild(CreateWrappedLabel($"{citizen.Name}: {FormatPercent(citizen.Satisfaction)}", UiTheme.TextMuted));
-        }
+        var moneyRows = AddPanelRows(_diagnosticsList, T("ui.analytics_money_supply"), "$");
+        moneyRows.AddChild(CreateStatRow(T("ui.analytics_external_inflow"), FormatMoney(analytics.ExternalInflow), analytics.ExternalInflow > 0f ? UiTheme.Success : UiTheme.Text));
+        moneyRows.AddChild(CreateStatRow(T("ui.analytics_external_outflow"), FormatMoney(analytics.ExternalOutflow), analytics.ExternalOutflow > 0f ? UiTheme.Warning : UiTheme.Text));
+        moneyRows.AddChild(CreateStatRow(T("ui.analytics_internal_transfers"), FormatMoney(analytics.InternalTransfers)));
+        moneyRows.AddChild(CreateStatRow(T("ui.analytics_consumer_spending"), FormatMoney(analytics.ConsumerSpending)));
+        moneyRows.AddChild(CreateStatRow(T("ui.analytics_gross_wages"), FormatMoney(analytics.GrossWagesPaid)));
+        moneyRows.AddChild(CreateStatRow(T("ui.analytics_net_wages"), FormatMoney(analytics.NetWagesPaid)));
+        moneyRows.AddChild(CreateStatRow(T("ui.analytics_public_budget"), FormatMoney(analytics.Budget)));
+        moneyRows.AddChild(CreateStatRow(T("ui.analytics_citizen_cash"), FormatMoney(analytics.CitizenCash)));
+        moneyRows.AddChild(CreateStatRow(T("ui.analytics_citizen_income"), FormatMoney(analytics.CitizenIncome)));
+        moneyRows.AddChild(CreateStatRow(T("ui.analytics_business_cash"), FormatMoney(analytics.BusinessCash)));
+        moneyRows.AddChild(CreateStatRow(T("ui.analytics_total_tracked"), FormatMoney(analytics.TrackedMoney)));
+
+        var needsRows = AddPanelRows(_diagnosticsList, T("ui.analytics_need_trends"), "+");
+        AddNeedTrend(needsRows, T("ui.analytics_food"), analytics.Food, previous?.Food);
+        AddNeedTrend(needsRows, T("ui.housing"), analytics.Housing, previous?.Housing);
+        AddNeedTrend(needsRows, T("ui.safety"), analytics.Safety, previous?.Safety);
+        AddNeedTrend(needsRows, T("ui.analytics_healthcare"), analytics.Healthcare, previous?.Healthcare);
+        AddNeedTrend(needsRows, T("ui.analytics_entertainment"), analytics.Entertainment, previous?.Entertainment);
+
+        var demandRows = AddPanelRows(_diagnosticsList, T("ui.analytics_unmet_demand"), "D");
+        AddDemandRow(demandRows, T("ui.analytics_food"), analytics.FoodDemand);
+        AddDemandRow(demandRows, T("ui.analytics_goods"), analytics.GoodsDemand);
+        AddDemandRow(demandRows, T("ui.analytics_healthcare"), analytics.HealthcareDemand);
+
+        _previousAnalytics = analytics;
     }
 
-    private void RebuildEventFeed(WorldState world)
+    private void AddNeedTrend(Container parent, string title, float value, float? previousValue)
     {
-        ClearChildren(_eventFeed);
+        var delta = previousValue.HasValue ? value - previousValue.Value : 0f;
+        var trend = Math.Abs(delta) < 0.05f ? "0" : FormatSigned(delta);
+        var color = value < 50f ? UiTheme.Danger : value < 65f ? UiTheme.Warning : UiTheme.Success;
+        parent.AddChild(CreateStatRow(title, $"{FormatPercent(value)} ({trend})", color));
+        parent.AddChild(CreateAnalyticsBar(value, color));
+    }
 
-        var events = world.Events.OrderByDescending(e => e.CreatedAtTick).Take(4).ToList();
-        if (events.Count == 0)
-        {
-            var empty = CreatePanel(UiTheme.Event);
-            empty.SizeFlagsHorizontal = SizeFlags.ExpandFill;
-            var rows = new VBoxContainer();
-            rows.MouseFilter = MouseFilterEnum.Ignore;
-            empty.AddChild(rows);
-            rows.AddChild(CreateWrappedLabel(T("ui.no_events"), UiTheme.TextMuted));
-            _eventFeed.AddChild(empty);
-            return;
-        }
+    private void AddDemandRow(Container parent, string title, DemandSnapshot demand)
+    {
+        var color = demand.UnmetDemand > 10f ? UiTheme.Warning : UiTheme.Success;
+        var text = $"{FormatMoney(demand.UnmetDemand)} / {FormatMoney(demand.DesiredSpending)}";
+        var row = CreateStatRow(title, text, color);
+        row.TooltipText = Tf(
+            "ui.analytics_demand_tooltip",
+            FormatMoney(demand.AvailableSupplyValue),
+            FormatMoney(demand.AvailableCash),
+            demand.AverageQuality.ToString("F2", CultureInfo.InvariantCulture));
+        parent.AddChild(row);
+    }
 
-        foreach (var gameEvent in events)
+    private static ProgressBar CreateAnalyticsBar(float value, Color color)
+    {
+        var bar = new ProgressBar
         {
-            var card = CreateEventCard(world, gameEvent, compact: true);
-            card.SizeFlagsHorizontal = SizeFlags.ExpandFill;
-            _eventFeed.AddChild(card);
-        }
+            MinValue = 0,
+            MaxValue = 100,
+            Value = Math.Clamp(value, 0f, 100f),
+            ShowPercentage = false,
+            CustomMinimumSize = new Vector2(0, 7),
+            SizeFlagsHorizontal = SizeFlags.ExpandFill
+        };
+        bar.AddThemeStyleboxOverride("background", UiTheme.PanelStyle(UiTheme.Button, UiTheme.Button, 4, 0));
+        bar.AddThemeStyleboxOverride("fill", UiTheme.PanelStyle(color, color, 4, 0));
+        return bar;
     }
 
     private void ResolveSelectedEventChoice(int eventId, string choiceId)
@@ -594,6 +1133,7 @@ public partial class MainDashboard : Control
         {
             var path = SavePath();
             _bridge.SaveWorld(path);
+            _hasActiveGame = true;
             _systemMessage = Tf("ui.save_success", path);
         }
         catch (Exception ex)
@@ -601,7 +1141,7 @@ public partial class MainDashboard : Control
             _systemMessage = Tf("ui.save_failed", ex.Message);
         }
 
-        Refresh();
+        RefreshCurrentScreen();
     }
 
     private void LoadWorld()
@@ -618,6 +1158,9 @@ public partial class MainDashboard : Control
                 _projectMessage = null;
                 _eventMessage = null;
                 _systemMessage = Tf("ui.load_success", path);
+                _previousAnalytics = null;
+                _hasActiveGame = true;
+                _uiState = MainUiState.InGame;
             }
             else
             {
@@ -629,7 +1172,25 @@ public partial class MainDashboard : Control
             _systemMessage = Tf("ui.load_failed", ex.Message);
         }
 
-        Refresh();
+        RefreshCurrentScreen();
+    }
+
+    private void RefreshCurrentScreen()
+    {
+        if (_uiState == MainUiState.InGame)
+        {
+            Refresh();
+            return;
+        }
+
+        if (_uiState == MainUiState.PausedMenu)
+        {
+            BuildInterface();
+            Refresh();
+            return;
+        }
+
+        BuildInterface();
     }
 
     private void ClearSelection()
@@ -642,14 +1203,49 @@ public partial class MainDashboard : Control
 
     private void CycleContextTab()
     {
-        if (_tabs.GetTabCount() <= 0) return;
+        var next = ((int)_contextPanelMode + 1) % 3;
+        _contextPanelMode = (ContextPanelMode)next;
+        _isContextPanelOpen = true;
+        BuildInterface();
+        Refresh();
+    }
 
-        _tabs.CurrentTab = (_tabs.CurrentTab + 1) % _tabs.GetTabCount();
+    private void ToggleContextPanel(ContextPanelMode mode)
+    {
+        if (_isContextPanelOpen && _contextPanelMode == mode)
+        {
+            _isContextPanelOpen = false;
+        }
+        else
+        {
+            _contextPanelMode = mode;
+            _isContextPanelOpen = true;
+        }
+
+        BuildInterface();
+        Refresh();
+    }
+
+    private void CloseContextPanel()
+    {
+        _isContextPanelOpen = false;
+        BuildInterface();
+        Refresh();
     }
 
     private static string SavePath()
     {
         return ProjectSettings.GlobalizePath("user://green_district_save.json");
+    }
+
+    private static string SettingsPath()
+    {
+        return ProjectSettings.GlobalizePath("user://settings.json");
+    }
+
+    private static bool HasSaveFile()
+    {
+        return File.Exists(SavePath());
     }
 
     private void AddCityIssueCards(Container parent, WorldState world)
@@ -799,6 +1395,7 @@ public partial class MainDashboard : Control
             if (input is InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left })
             {
                 _selectedEventId = gameEvent.Id;
+                _selectedDistrictId = EventDistrictId(gameEvent) ?? _selectedDistrictId;
                 _eventMessage = null;
                 Refresh();
             }
@@ -917,6 +1514,35 @@ public partial class MainDashboard : Control
         };
         UiTheme.ApplyButton(button);
         button.Pressed += action;
+        return button;
+    }
+
+    private static Button CreateMenuButton(string text, Action action)
+    {
+        var button = CreateButton(text, action, 240);
+        button.CustomMinimumSize = new Vector2(240, 40);
+        button.SizeFlagsHorizontal = SizeFlags.ShrinkCenter;
+        return button;
+    }
+
+    private static Control CreateMenuBottomPadding()
+    {
+        return new Control
+        {
+            CustomMinimumSize = new Vector2(0, 10),
+            MouseFilter = MouseFilterEnum.Ignore
+        };
+    }
+
+    private Button CreateContextModeButton(string text, string tooltip, ContextPanelMode mode)
+    {
+        var button = CreateButton(text, () => ToggleContextPanel(mode), 38, tooltip);
+        button.CustomMinimumSize = new Vector2(38, 38);
+        button.AddThemeStyleboxOverride(
+            "normal",
+            _isContextPanelOpen && _contextPanelMode == mode
+                ? UiTheme.PanelStyle(UiTheme.ButtonPressed, UiTheme.Info, 5, 2)
+                : UiTheme.ButtonStyle(UiTheme.Button));
         return button;
     }
 
@@ -1078,6 +1704,14 @@ public partial class MainDashboard : Control
         return value.ToString("N0", CultureInfo.InvariantCulture);
     }
 
+    private static string FormatSignedMoney(float value)
+    {
+        if (Math.Abs(value) < 0.001f) return "0";
+
+        var sign = value > 0f ? "+" : "-";
+        return sign + Math.Abs(value).ToString("N0", CultureInfo.InvariantCulture);
+    }
+
     private static string FormatPercent(float value)
     {
         return value.ToString("F1", CultureInfo.InvariantCulture) + "%";
@@ -1093,6 +1727,78 @@ public partial class MainDashboard : Control
         var ru = Path.Combine(localizationRoot, "ru.json");
         if (File.Exists(en)) _localization.LoadJsonFile(en);
         if (File.Exists(ru)) _localization.LoadJsonFile(ru);
+    }
+
+    private void LoadSettings()
+    {
+        try
+        {
+            var path = SettingsPath();
+            if (File.Exists(path))
+            {
+                _settings = JsonSerializer.Deserialize<GameSettings>(File.ReadAllText(path)) ?? GameSettings.Default();
+            }
+        }
+        catch
+        {
+            _settings = GameSettings.Default();
+        }
+
+        _settings.Normalize();
+    }
+
+    private void SaveSettings()
+    {
+        try
+        {
+            var path = SettingsPath();
+            var directory = Path.GetDirectoryName(path);
+            if (!string.IsNullOrWhiteSpace(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            _settings.Normalize();
+            File.WriteAllText(path, JsonSerializer.Serialize(_settings, new JsonSerializerOptions { WriteIndented = true }));
+        }
+        catch
+        {
+            // Settings are convenience state; gameplay should continue if persistence fails.
+        }
+    }
+
+    private void PersistAndApplySettings()
+    {
+        _settings.Normalize();
+        SaveSettings();
+        ApplySettings();
+    }
+
+    private void ApplySettings()
+    {
+        ApplyAudioVolume("Master", _settings.MasterVolume);
+        ApplyAudioVolume("Music", _settings.MusicVolume);
+        ApplyAudioVolume("Effects", _settings.EffectsVolume);
+
+        if (_settings.WindowMode == WindowModeSetting.Fullscreen)
+        {
+            DisplayServer.WindowSetMode(DisplayServer.WindowMode.Fullscreen);
+            return;
+        }
+
+        DisplayServer.WindowSetMode(DisplayServer.WindowMode.Windowed);
+        var resolution = AvailableResolutions[Math.Clamp(_settings.ResolutionIndex, 0, AvailableResolutions.Length - 1)];
+        DisplayServer.WindowSetSize(resolution);
+    }
+
+    private static void ApplyAudioVolume(string busName, float volume)
+    {
+        var bus = AudioServer.GetBusIndex(busName);
+        if (bus < 0) return;
+
+        var clamped = Math.Clamp(volume, 0f, 1f);
+        AudioServer.SetBusMute(bus, clamped <= 0.001f);
+        AudioServer.SetBusVolumeDb(bus, clamped <= 0.001f ? -80f : Mathf.LinearToDb(clamped));
     }
 
     private static string? FindRepositoryRoot()
@@ -1232,6 +1938,13 @@ public partial class MainDashboard : Control
             || gameEvent.Description.Contains(district.Name, StringComparison.OrdinalIgnoreCase);
     }
 
+    private static int? EventDistrictId(GameEvent gameEvent)
+    {
+        return gameEvent.Choices
+            .Select(choice => choice.DistrictId)
+            .FirstOrDefault(districtId => districtId.HasValue);
+    }
+
     private string ChoiceEffectsText(EventChoice choice)
     {
         var parts = new List<string>();
@@ -1275,5 +1988,275 @@ public partial class MainDashboard : Control
     private static string FormatSigned(float value)
     {
         return value.ToString("+0.0;-0.0;0.0", CultureInfo.InvariantCulture);
+    }
+
+    private enum MainUiState
+    {
+        MainMenu,
+        InGame,
+        PausedMenu,
+        Settings
+    }
+
+    private enum ContextPanelMode
+    {
+        Overview,
+        Projects,
+        Diagnostics
+    }
+
+    private enum WindowModeSetting
+    {
+        Windowed,
+        Fullscreen
+    }
+
+    private sealed class AnalyticsSnapshot
+    {
+        public int Population { get; private init; }
+        public int Households { get; private init; }
+        public int Workforce { get; private init; }
+        public int Employed { get; private init; }
+        public int Unemployed { get; private init; }
+        public int Students { get; private init; }
+        public int Retired { get; private init; }
+        public int Businesses { get; private init; }
+        public int ActiveBusinesses { get; private init; }
+        public int FilledJobs { get; private init; }
+        public int JobCapacity { get; private init; }
+        public float BusinessRevenue { get; private init; }
+        public float BusinessExpenses { get; private init; }
+        public float BusinessProfit { get; private init; }
+        public float BusinessCash { get; private init; }
+        public float AverageBusinessLevel { get; private init; }
+        public float AverageProductQuality { get; private init; }
+        public float LastBusinessInvestment { get; private init; }
+        public IReadOnlyList<BusinessHealthSnapshot> BusinessHealth { get; private init; } = Array.Empty<BusinessHealthSnapshot>();
+        public float Budget { get; private init; }
+        public float NetBudgetChange { get; private init; }
+        public float IncomeTax { get; private init; }
+        public float BusinessTax { get; private init; }
+        public float OperatingExpenses { get; private init; }
+        public int ActiveProjects { get; private init; }
+        public int CompletedProjects { get; private init; }
+        public float CitizenIncome { get; private init; }
+        public float CitizenCash { get; private init; }
+        public float TrackedMoney { get; private init; }
+        public float ExternalInflow { get; private init; }
+        public float ExternalOutflow { get; private init; }
+        public float InternalTransfers { get; private init; }
+        public float ConsumerSpending { get; private init; }
+        public float GrossWagesPaid { get; private init; }
+        public float NetWagesPaid { get; private init; }
+        public float Food { get; private init; }
+        public float Housing { get; private init; }
+        public float Safety { get; private init; }
+        public float Healthcare { get; private init; }
+        public float Entertainment { get; private init; }
+        public DemandSnapshot FoodDemand { get; private init; } = DemandSnapshot.Empty("food");
+        public DemandSnapshot GoodsDemand { get; private init; } = DemandSnapshot.Empty("goods");
+        public DemandSnapshot HealthcareDemand { get; private init; } = DemandSnapshot.Empty("healthcare");
+
+        public static AnalyticsSnapshot FromWorld(WorldState world)
+        {
+            var activeBusinesses = world.Businesses.Where(business => business.Status == BusinessStatus.Active).ToList();
+            var demand = world.Economy.EstimateConsumerDemand(world);
+            var citizenIncome = world.Citizens.Sum(citizen => citizen.Income);
+            var citizenCash = world.Citizens.Sum(citizen => citizen.Cash);
+            var businessRevenue = world.Businesses.Sum(business => business.Revenue);
+            var businessExpenses = world.Businesses.Sum(business => business.Expenses);
+            var businessCash = world.Businesses.Sum(business => business.Cash);
+            var averageBusinessLevel = activeBusinesses.Count == 0 ? 0f : (float)activeBusinesses.Average(business => business.BusinessLevel);
+            var averageProductQuality = activeBusinesses.Count == 0 ? 0f : activeBusinesses.Average(business => business.ProductQuality);
+            var lastBusinessInvestment = world.Businesses.Sum(business => business.LastInvestment);
+
+            return new AnalyticsSnapshot
+            {
+                Population = world.Citizens.Count,
+                Households = world.Households.Count,
+                Workforce = world.Citizens.Count(citizen => citizen.EmploymentStatus is EmploymentStatus.Employed or EmploymentStatus.Unemployed),
+                Employed = world.Citizens.Count(citizen => citizen.EmploymentStatus == EmploymentStatus.Employed),
+                Unemployed = world.Citizens.Count(citizen => citizen.EmploymentStatus == EmploymentStatus.Unemployed),
+                Students = world.Citizens.Count(citizen => citizen.EmploymentStatus == EmploymentStatus.Student),
+                Retired = world.Citizens.Count(citizen => citizen.EmploymentStatus == EmploymentStatus.Retired),
+                Businesses = world.Businesses.Count,
+                ActiveBusinesses = activeBusinesses.Count,
+                FilledJobs = activeBusinesses.Sum(business => business.EmployeeIds.Count),
+                JobCapacity = activeBusinesses.Sum(business => Math.Max(0, business.MaxEmployees)),
+                BusinessRevenue = businessRevenue,
+                BusinessExpenses = businessExpenses,
+                BusinessProfit = businessRevenue - businessExpenses,
+                BusinessCash = businessCash,
+                AverageBusinessLevel = averageBusinessLevel,
+                AverageProductQuality = averageProductQuality,
+                LastBusinessInvestment = lastBusinessInvestment,
+                BusinessHealth = world.Businesses
+                    .Select(BusinessHealthSnapshot.From)
+                    .OrderByDescending(business => business.ClosureRisk)
+                    .ThenBy(business => business.Cash)
+                    .ThenBy(business => business.Name)
+                    .Take(6)
+                    .ToList(),
+                Budget = world.Budget,
+                NetBudgetChange = world.LastNetBudgetChange,
+                IncomeTax = world.LastIncomeTaxCollected,
+                BusinessTax = world.LastBusinessTaxCollected,
+                OperatingExpenses = world.LastOperatingExpenses,
+                ActiveProjects = world.Projects.Count(project => !project.Completed),
+                CompletedProjects = world.Projects.Count(project => project.Completed),
+                CitizenIncome = citizenIncome,
+                CitizenCash = citizenCash,
+                TrackedMoney = world.Budget + citizenCash + businessCash,
+                ExternalInflow = world.LastExternalInflow,
+                ExternalOutflow = world.LastExternalOutflow,
+                InternalTransfers = world.LastInternalTransfers,
+                ConsumerSpending = world.LastConsumerSpending,
+                GrossWagesPaid = world.LastGrossWagesPaid,
+                NetWagesPaid = world.LastNetWagesPaid,
+                Food = Average(world.Citizens, citizen => citizen.FoodSatisfaction),
+                Housing = Average(world.Citizens, citizen => citizen.HousingSatisfaction),
+                Safety = Average(world.Citizens, citizen => citizen.SafetySatisfaction),
+                Healthcare = Average(world.Citizens, citizen => citizen.HealthcareSatisfaction),
+                Entertainment = Average(world.Citizens, citizen => citizen.EntertainmentSatisfaction),
+                FoodDemand = DemandSnapshot.From(demand.FirstOrDefault(item => item.Category == "food"), "food"),
+                GoodsDemand = DemandSnapshot.From(demand.FirstOrDefault(item => item.Category == "goods"), "goods"),
+                HealthcareDemand = DemandSnapshot.From(demand.FirstOrDefault(item => item.Category == "healthcare"), "healthcare")
+            };
+        }
+
+        private static float Average(IEnumerable<Citizen> citizens, Func<Citizen, float> selector)
+        {
+            var list = citizens.ToList();
+            return list.Count == 0 ? 0f : list.Average(selector);
+        }
+    }
+
+    private sealed record BusinessHealthSnapshot(
+        string Name,
+        string Status,
+        int BusinessLevel,
+        float ProductQuality,
+        float Cash,
+        float LastProducedUnits,
+        float ProductionCapacity,
+        float LastLocalSalesRevenue,
+        float LastExternalSalesRevenue,
+        int ConsecutiveLossTicks,
+        float ClosureRisk)
+    {
+        public static BusinessHealthSnapshot From(Business business)
+        {
+            var staffingCapacity = business.BaseOutput *
+                                   business.GetProductionMultiplier() *
+                                   business.GetStaffingRatio();
+
+            return new BusinessHealthSnapshot(
+                business.Name,
+                business.Status.ToString(),
+                business.BusinessLevel,
+                business.ProductQuality,
+                business.Cash,
+                business.LastProducedUnits,
+                staffingCapacity,
+                business.LastLocalSalesRevenue,
+                business.LastExternalSalesRevenue,
+                business.ConsecutiveLossTicks,
+                EstimateClosureRisk(business));
+        }
+
+        private static float EstimateClosureRisk(Business business)
+        {
+            if (business.Status == BusinessStatus.Bankrupt) return 100f;
+            if (business.Status == BusinessStatus.Closed) return 90f;
+
+            var payrollReserve = Math.Max(0f, business.WagePerEmployee) * Math.Max(1, business.EmployeeIds.Count);
+            var risk = 0f;
+
+            if (business.Cash < 0f)
+            {
+                risk += 45f;
+            }
+            else if (business.Cash < payrollReserve)
+            {
+                risk += 25f;
+            }
+
+            risk += Math.Min(45f, business.ConsecutiveLossTicks * 18f);
+
+            if (business.LastProducedUnits > 0.001f &&
+                business.LastSoldUnits <= 0.001f &&
+                business.RevenueThisTick <= 0.001f)
+            {
+                risk += 20f;
+            }
+
+            if (business.GetStaffingRatio() < 0.25f)
+            {
+                risk += 15f;
+            }
+
+            if (business.ProfitThisTick < 0f)
+            {
+                risk += 15f;
+            }
+
+            return Math.Clamp(risk, 0f, 100f);
+        }
+    }
+
+    private sealed record DemandSnapshot(
+        string Category,
+        float DesiredSpending,
+        float AvailableCash,
+        float AvailableSupplyValue,
+        float UnmetDemand,
+        float AverageQuality)
+    {
+        public static DemandSnapshot Empty(string category) => new(category, 0f, 0f, 0f, 0f, 0f);
+
+        public static DemandSnapshot From(ConsumerDemandSnapshot? demand, string category)
+        {
+            return demand == null
+                ? Empty(category)
+                : new DemandSnapshot(
+                    demand.Category,
+                    demand.DesiredSpending,
+                    demand.AvailableCash,
+                    demand.AvailableSupplyValue,
+                    demand.UnmetDemand,
+                    demand.AverageQuality);
+        }
+    }
+
+    private sealed class GameSettings
+    {
+        public float MasterVolume { get; set; } = 1f;
+        public float MusicVolume { get; set; } = 1f;
+        public float EffectsVolume { get; set; } = 1f;
+        public int ResolutionIndex { get; set; }
+        public WindowModeSetting WindowMode { get; set; } = WindowModeSetting.Windowed;
+        public GameLanguage Language { get; set; } = GameLanguage.English;
+
+        public static GameSettings Default()
+        {
+            return new GameSettings();
+        }
+
+        public void Normalize()
+        {
+            MasterVolume = Math.Clamp(MasterVolume, 0f, 1f);
+            MusicVolume = Math.Clamp(MusicVolume, 0f, 1f);
+            EffectsVolume = Math.Clamp(EffectsVolume, 0f, 1f);
+            ResolutionIndex = Math.Clamp(ResolutionIndex, 0, AvailableResolutions.Length - 1);
+            if (!Enum.IsDefined(WindowMode))
+            {
+                WindowMode = WindowModeSetting.Windowed;
+            }
+
+            if (!Enum.IsDefined(Language))
+            {
+                Language = GameLanguage.English;
+            }
+        }
     }
 }

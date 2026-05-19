@@ -1,5 +1,6 @@
 using System;
 using GreenDistrict.Simulation.Core;
+using GreenDistrict.Simulation.Map;
 
 namespace GreenDistrict.Simulation.Needs;
 
@@ -47,16 +48,21 @@ public class NeedsSystem
     /// </summary>
     public void UpdateTick(WorldState world)
     {
+        UpdateTick(world, accessibility: null);
+    }
+
+    public void UpdateTick(WorldState world, MapAccessibilityReport? accessibility)
+    {
         if (world == null) throw new ArgumentNullException(nameof(world));
 
         foreach (var citizen in world.Citizens)
         {
             // Decay needs
-            citizen.FoodSatisfaction = Clamp01(citizen.FoodSatisfaction - FoodDecayPerTick);
+            citizen.FoodSatisfaction = Clamp01(citizen.FoodSatisfaction - FoodDecayPerTick * CoverageDecayMultiplier(accessibility, citizen.DistrictId, MapCoverageKind.Trade));
             citizen.HousingSatisfaction = Clamp01(citizen.HousingSatisfaction + CalculateHousingDelta(world, citizen));
-            citizen.SafetySatisfaction = Clamp01(citizen.SafetySatisfaction - SafetyDecayPerTick);
-            citizen.HealthcareSatisfaction = Clamp01(citizen.HealthcareSatisfaction - HealthcareDecayPerTick);
-            citizen.EntertainmentSatisfaction = Clamp01(citizen.EntertainmentSatisfaction - EntertainmentDecayPerTick);
+            citizen.SafetySatisfaction = Clamp01(citizen.SafetySatisfaction - SafetyDecayPerTick * CoverageDecayMultiplier(accessibility, citizen.DistrictId, MapCoverageKind.Safety));
+            citizen.HealthcareSatisfaction = Clamp01(citizen.HealthcareSatisfaction - HealthcareDecayPerTick * CoverageDecayMultiplier(accessibility, citizen.DistrictId, MapCoverageKind.Healthcare));
+            citizen.EntertainmentSatisfaction = Clamp01(citizen.EntertainmentSatisfaction - EntertainmentDecayPerTick * CoverageDecayMultiplier(accessibility, citizen.DistrictId, MapCoverageKind.Recreation));
 
             // Recalculate aggregated satisfaction
             citizen.RecalculateSatisfaction();
@@ -64,6 +70,14 @@ public class NeedsSystem
             // Update mood and other derived stats
             citizen.UpdateMood();
         }
+    }
+
+    private static float CoverageDecayMultiplier(MapAccessibilityReport? accessibility, int? districtId, MapCoverageKind kind)
+    {
+        if (accessibility == null || !districtId.HasValue) return 1f;
+
+        var coveragePercent = accessibility.GetDistrictCoveragePercent(districtId, kind);
+        return 1f + (100f - Math.Clamp(coveragePercent, 0f, 100f)) / 100f;
     }
 
     private float CalculateHousingDelta(WorldState world, Citizen citizen)

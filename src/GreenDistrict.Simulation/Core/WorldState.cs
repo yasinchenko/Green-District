@@ -45,6 +45,7 @@ using GreenDistrict.Simulation.Scenarios;
     public float ProjectOperatingExpensePerTick { get; set; } = 0f;
     public int ElectionIntervalTicks { get; set; } = 1440 * 365 * 4;
     public int SimulationSeed { get; private set; }
+    public int EconomicTickInterval { get; private set; } = 1440;
     public int DemographyTicksPerYear { get; private set; } = 1440 * 365;
     public float BirthRatePerPersonPerYear { get; private set; } = 0.02f;
     public float BaseDeathRatePerPersonPerYear { get; private set; } = 0.01f;
@@ -64,6 +65,16 @@ using GreenDistrict.Simulation.Scenarios;
     public float LastBusinessTaxCollected { get; set; }
     public float LastOperatingExpenses { get; set; }
     public float LastNetBudgetChange { get; set; }
+    public float LastSalesRevenueGenerated { get; set; }
+    public float LastGrossWagesPaid { get; set; }
+    public float LastNetWagesPaid { get; set; }
+    public float LastProjectSpending { get; set; }
+    public float LastProjectBenefits { get; set; }
+    public float LastProjectRefunds { get; set; }
+    public float LastConsumerSpending { get; set; }
+    public float LastExternalInflow { get; set; }
+    public float LastExternalOutflow { get; set; }
+    public float LastInternalTransfers { get; set; }
     public long LastElectionTick { get; private set; } = -1;
     public float LastElectionSupport { get; private set; }
     public int ElectionCount { get; private set; }
@@ -86,11 +97,17 @@ using GreenDistrict.Simulation.Scenarios;
 
         // Register behavior, then economy/job and payroll processing to JobAndIncomeUpdate phase
         _updateManager.Register(UpdatePhase.JobAndIncomeUpdate, () => {
+            ResetMoneyFlowMetrics();
             _behaviorSystem.UpdateTick(this);
+            if (!ShouldRunEconomicTick()) return;
+
             _economySystem.AssignJobs(this);
-            _economySystem.ProcessProductionAndSales(this);
+            _economySystem.ProcessProduction(this);
             _economySystem.ProcessPayroll(this);
+            _economySystem.ProcessConsumerPurchases(this);
+            _economySystem.ProcessExternalSales(this);
             _economySystem.ProcessBusinessTaxes(this);
+            _economySystem.ProcessBusinessInvestments(this);
             _economySystem.UpdateBusinessViability(this);
             _economySystem.ProcessGovernmentExpenses(this);
             RecalculateHouseholds();
@@ -154,6 +171,7 @@ using GreenDistrict.Simulation.Scenarios;
         BusinessTaxRate = Math.Clamp(scenario.BusinessTaxRate, 0f, 1f);
         BaseOperatingExpensePerTick = Math.Max(0f, scenario.BaseOperatingExpensePerTick);
         ProjectOperatingExpensePerTick = Math.Max(0f, scenario.ProjectOperatingExpensePerTick);
+        ConfigureEconomicTickInterval(scenario.EconomicTickInterval);
         ConfigureDemography(
             scenario.Seed,
             scenario.DemographyTicksPerYear,
@@ -180,8 +198,11 @@ using GreenDistrict.Simulation.Scenarios;
                 BaseOutput = businessSeed.BaseOutput,
                 UnitPrice = businessSeed.UnitPrice,
                 DemandMultiplier = businessSeed.DemandMultiplier,
+                Cash = businessSeed.Cash > 0f ? businessSeed.Cash : Math.Max(0f, businessSeed.Revenue - businessSeed.Expenses),
                 Revenue = businessSeed.Revenue,
                 Expenses = businessSeed.Expenses,
+                TotalRevenue = businessSeed.Revenue,
+                TotalExpenses = businessSeed.Expenses,
                 Status = ParseBusinessStatus(businessSeed.Status)
             });
         }
@@ -204,6 +225,7 @@ using GreenDistrict.Simulation.Scenarios;
                 ParseGender(citizenSeed.Gender))
             {
                 DistrictId = citizenSeed.DistrictId,
+                Cash = citizenSeed.Cash > 0f ? citizenSeed.Cash : citizenSeed.Income,
                 Income = citizenSeed.Income,
                 Satisfaction = Math.Clamp(citizenSeed.Satisfaction, 0f, 100f),
                 Mood = Math.Clamp(citizenSeed.Mood, 0f, 100f),
@@ -555,11 +577,22 @@ using GreenDistrict.Simulation.Scenarios;
         Businesses.Clear();
         Projects.Clear();
         Events.Clear();
+        EconomicTickInterval = 1440;
         LastUnemploymentRate = 0f;
         LastIncomeTaxCollected = 0f;
         LastBusinessTaxCollected = 0f;
         LastOperatingExpenses = 0f;
         LastNetBudgetChange = 0f;
+        LastSalesRevenueGenerated = 0f;
+        LastGrossWagesPaid = 0f;
+        LastNetWagesPaid = 0f;
+        LastProjectSpending = 0f;
+        LastProjectBenefits = 0f;
+        LastProjectRefunds = 0f;
+        LastConsumerSpending = 0f;
+        LastExternalInflow = 0f;
+        LastExternalOutflow = 0f;
+        LastInternalTransfers = 0f;
         LastElectionTick = -1;
         LastElectionSupport = 0f;
         ElectionCount = 0;
@@ -571,6 +604,16 @@ using GreenDistrict.Simulation.Scenarios;
         float lastBusinessTaxCollected,
         float lastOperatingExpenses,
         float lastNetBudgetChange,
+        float lastSalesRevenueGenerated,
+        float lastGrossWagesPaid,
+        float lastNetWagesPaid,
+        float lastProjectSpending,
+        float lastProjectBenefits,
+        float lastProjectRefunds,
+        float lastConsumerSpending,
+        float lastExternalInflow,
+        float lastExternalOutflow,
+        float lastInternalTransfers,
         long lastElectionTick,
         float lastElectionSupport,
         int electionCount)
@@ -580,9 +623,37 @@ using GreenDistrict.Simulation.Scenarios;
         LastBusinessTaxCollected = lastBusinessTaxCollected;
         LastOperatingExpenses = lastOperatingExpenses;
         LastNetBudgetChange = lastNetBudgetChange;
+        LastSalesRevenueGenerated = lastSalesRevenueGenerated;
+        LastGrossWagesPaid = lastGrossWagesPaid;
+        LastNetWagesPaid = lastNetWagesPaid;
+        LastProjectSpending = lastProjectSpending;
+        LastProjectBenefits = lastProjectBenefits;
+        LastProjectRefunds = lastProjectRefunds;
+        LastConsumerSpending = lastConsumerSpending;
+        LastExternalInflow = lastExternalInflow;
+        LastExternalOutflow = lastExternalOutflow;
+        LastInternalTransfers = lastInternalTransfers;
         LastElectionTick = lastElectionTick;
         LastElectionSupport = lastElectionSupport;
         ElectionCount = Math.Max(0, electionCount);
+    }
+
+    public void ResetMoneyFlowMetrics()
+    {
+        LastIncomeTaxCollected = 0f;
+        LastBusinessTaxCollected = 0f;
+        LastOperatingExpenses = 0f;
+        LastNetBudgetChange = 0f;
+        LastSalesRevenueGenerated = 0f;
+        LastGrossWagesPaid = 0f;
+        LastNetWagesPaid = 0f;
+        LastProjectSpending = 0f;
+        LastProjectBenefits = 0f;
+        LastProjectRefunds = 0f;
+        LastConsumerSpending = 0f;
+        LastExternalInflow = 0f;
+        LastExternalOutflow = 0f;
+        LastInternalTransfers = 0f;
     }
 
     public void ConfigureDemography(
@@ -598,6 +669,16 @@ using GreenDistrict.Simulation.Scenarios;
         BaseDeathRatePerPersonPerYear = Math.Clamp(baseDeathRatePerPersonPerYear, 0f, 1f);
         MigrationRatePerPersonPerYear = Math.Clamp(migrationRatePerPersonPerYear, 0f, 1f);
         _demographySystem = CreateDemographySystem();
+    }
+
+    public void ConfigureEconomicTickInterval(int ticks)
+    {
+        EconomicTickInterval = Math.Max(1, ticks);
+    }
+
+    private bool ShouldRunEconomicTick()
+    {
+        return EconomicTickInterval <= 1 || Clock.CurrentTick % EconomicTickInterval == 0;
     }
 
     private DemographySystem CreateDemographySystem()

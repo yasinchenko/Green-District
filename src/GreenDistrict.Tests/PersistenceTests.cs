@@ -19,6 +19,7 @@ public class PersistenceTests
             BusinessTaxRate = 0.08f,
             ElectionIntervalTicks = 12
         };
+        world.ConfigureEconomicTickInterval(30);
         world.ConfigureDemography(seed: 42, ticksPerYear: 2, birthRatePerPersonPerYear: 0.3f, baseDeathRatePerPersonPerYear: 0.04f, migrationRatePerPersonPerYear: 0.01f);
         world.Clock.AdvanceTicks(42);
         world.Clock.TimeScale = 2f;
@@ -29,6 +30,7 @@ public class PersistenceTests
         var citizen = new Citizen("Alice North", 34, "Worker", Gender.Female)
         {
             DistrictId = 7,
+            Cash = 500f,
             Income = 900f,
             FoodSatisfaction = 80f,
             HousingSatisfaction = 70f,
@@ -47,8 +49,19 @@ public class PersistenceTests
         {
             Id = 20,
             DistrictId = 7,
+            Cash = 700f,
             Revenue = 1000f,
             Expenses = 300f,
+            RevenueThisTick = 120f,
+            ExpensesThisTick = 40f,
+            TotalRevenue = 1500f,
+            TotalExpenses = 500f,
+            LastLocalSalesRevenue = 15f,
+            LastExternalSalesRevenue = 25f,
+            BusinessLevel = 3,
+            ProductQuality = 1.4f,
+            InvestmentReserve = 275f,
+            LastInvestment = 35f,
             ProductionType = "goods"
         };
         business.EmployeeIds.Add(citizen.Id);
@@ -58,6 +71,10 @@ public class PersistenceTests
 
         var project = GovernmentProject.CreateTyped(ProjectType.Clinic, 7);
         world.Government.StartProject(world, project);
+        world.LastConsumerSpending = 42f;
+        world.LastExternalInflow = 123f;
+        world.LastExternalOutflow = project.Cost;
+        world.LastInternalTransfers = 456f;
 
         var gameEvent = new GameEvent("Crisis", "Choose response.", EventType.Decision);
         gameEvent.Choices.Add(new EventChoice("fund", "Fund response") { BudgetEffect = -100f, DistrictId = 7 });
@@ -74,6 +91,7 @@ public class PersistenceTests
         Assert.Equal(61f, loaded.SupportRating);
         Assert.Equal(0.12f, loaded.IncomeTaxRate);
         Assert.Equal(12, loaded.ElectionIntervalTicks);
+        Assert.Equal(30, loaded.EconomicTickInterval);
         Assert.Equal(42, loaded.SimulationSeed);
         Assert.Equal(2, loaded.DemographyTicksPerYear);
         Assert.Equal(0.3f, loaded.BirthRatePerPersonPerYear);
@@ -86,10 +104,26 @@ public class PersistenceTests
         var loadedEvent = Assert.Single(loaded.Events);
 
         Assert.Equal(citizen.Id, loadedCitizen.Id);
+        Assert.Equal(500f, loadedCitizen.Cash);
         Assert.Equal(household.Id, loadedCitizen.HouseholdId);
         Assert.Contains(loadedCitizen.Id, loadedHousehold.MemberIds);
         Assert.Equal(loadedHousehold.Id, loadedHousing.HouseholdId);
         Assert.Contains(loadedCitizen.Id, loadedBusiness.EmployeeIds);
+        Assert.Equal(700f, loadedBusiness.Cash);
+        Assert.Equal(120f, loadedBusiness.RevenueThisTick);
+        Assert.Equal(40f, loadedBusiness.ExpensesThisTick);
+        Assert.Equal(1500f, loadedBusiness.TotalRevenue);
+        Assert.Equal(500f, loadedBusiness.TotalExpenses);
+        Assert.Equal(15f, loadedBusiness.LastLocalSalesRevenue);
+        Assert.Equal(25f, loadedBusiness.LastExternalSalesRevenue);
+        Assert.Equal(3, loadedBusiness.BusinessLevel);
+        Assert.Equal(1.4f, loadedBusiness.ProductQuality);
+        Assert.Equal(275f, loadedBusiness.InvestmentReserve);
+        Assert.Equal(35f, loadedBusiness.LastInvestment);
+        Assert.Equal(42f, loaded.LastConsumerSpending);
+        Assert.Equal(123f, loaded.LastExternalInflow);
+        Assert.Equal(project.Cost, loaded.LastExternalOutflow);
+        Assert.Equal(456f, loaded.LastInternalTransfers);
         Assert.Equal(ProjectType.Clinic, loadedProject.Type);
         Assert.Equal(7, loadedProject.DistrictId);
         Assert.False(loadedProject.Completed);

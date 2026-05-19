@@ -7,15 +7,12 @@
   "baseOperatingExpensePerTick": 25,
   "projectOperatingExpensePerTick": 5,
   "seed": 0,
+  "economicTickInterval": 1440,
   "initialPopulation": 50,
   "districts": [
     {
       "id": 1,
       "name": "Central"
-    },
-    {
-      "id": 2,
-      "name": "Riverside"
     }
   ],
   "businesses": [
@@ -35,10 +32,10 @@
     },
     {
       "id": 2,
-      "name": "Riverside Shop",
+      "name": "Central Shop",
       "type": "shop",
       "maxEmployees": 14,
-      "districtId": 2,
+      "districtId": 1,
       "wagePerEmployee": 38,
       "productionType": "trade",
       "baseOutput": 300,
@@ -63,10 +60,10 @@
     },
     {
       "id": 4,
-      "name": "Riverside Clinic",
+      "name": "Central Clinic",
       "type": "clinic",
       "maxEmployees": 8,
-      "districtId": 2,
+      "districtId": 1,
       "wagePerEmployee": 42,
       "productionType": "services",
       "baseOutput": 220,
@@ -85,13 +82,13 @@
     },
     {
       "id": 2,
-      "districtId": 2,
+      "districtId": 1,
       "capacity": 2,
       "rentPerTick": 25
     },
     {
       "id": 3,
-      "districtId": 2,
+      "districtId": 1,
       "capacity": 3,
       "rentPerTick": 30
     }
@@ -121,12 +118,12 @@
       "districtId": 1
     },
     {
-      "name": "Anna River",
+      "name": "Anna Green",
       "age": 35,
       "profession": "Trader",
       "gender": "Female",
-      "districtId": 2,
-      "job": "Riverside Shop"
+      "districtId": 1,
+      "job": "Central Shop"
     }
   ],
   "households": [
@@ -142,21 +139,21 @@
       ]
     },
     {
-      "districtId": 2,
+      "districtId": 1,
       "housingUnitId": 2,
       "housingCapacity": 2,
       "rentPerTick": 25,
       "memberNames": [
-        "Anna River"
+        "Anna Green"
       ]
     }
   ],
   "projects": [
     {
       "id": 1,
-      "name": "Riverside Park",
+      "name": "Central Park",
       "type": "Park",
-      "districtId": 2,
+      "districtId": 1,
       "remainingTicks": 25,
       "startTick": -1
     }

@@ -1,0 +1,100 @@
+{
+  "objects": [
+    {
+      "key": "house.small",
+      "type": "Housing",
+      "widthMeters": 8,
+      "lengthMeters": 10,
+      "accessSides": "Any",
+      "assetKey": "building.house.small"
+    },
+    {
+      "key": "house.medium",
+      "type": "Housing",
+      "widthMeters": 10,
+      "lengthMeters": 14,
+      "accessSides": "Any",
+      "assetKey": "building.house.medium"
+    },
+    {
+      "key": "shop",
+      "type": "Business",
+      "widthMeters": 12,
+      "lengthMeters": 16,
+      "accessSides": "Any",
+      "assetKey": "business.shop"
+    },
+    {
+      "key": "workshop",
+      "type": "Business",
+      "widthMeters": 18,
+      "lengthMeters": 24,
+      "accessSides": "Any",
+      "assetKey": "business.workshop"
+    },
+    {
+      "key": "farm",
+      "type": "Business",
+      "widthMeters": 24,
+      "lengthMeters": 18,
+      "accessSides": "Any",
+      "assetKey": "business.farm"
+    },
+    {
+      "key": "clinic",
+      "type": "Service",
+      "widthMeters": 20,
+      "lengthMeters": 28,
+      "accessSides": "Any",
+      "assetKey": "service.clinic"
+    },
+    {
+      "key": "school",
+      "type": "Service",
+      "widthMeters": 35,
+      "lengthMeters": 45,
+      "accessSides": "Any",
+      "assetKey": "service.school"
+    },
+    {
+      "key": "police",
+      "type": "Service",
+      "widthMeters": 18,
+      "lengthMeters": 22,
+      "accessSides": "Any",
+      "assetKey": "service.police"
+    },
+    {
+      "key": "park.small",
+      "type": "Park",
+      "widthMeters": 24,
+      "lengthMeters": 24,
+      "accessSides": "Any",
+      "assetKey": "park.small"
+    },
+    {
+      "key": "marker.event",
+      "type": "Marker",
+      "widthMeters": 3,
+      "lengthMeters": 3,
+      "accessSides": "None",
+      "assetKey": "marker.event"
+    },
+    {
+      "key": "marker.crisis",
+      "type": "Marker",
+      "widthMeters": 3,
+      "lengthMeters": 3,
+      "accessSides": "None",
+      "assetKey": "marker.crisis"
+    },
+    {
+      "key": "marker.decision",
+      "type": "Marker",
+      "widthMeters": 3,
+      "lengthMeters": 3,
+      "accessSides": "None",
+      "assetKey": "marker.decision"
+    }
+  ]
+}

@@ -55,6 +55,11 @@ static WorldState CreateWorld(CliOptions options)
         scenario.DemographyTicksPerYear = options.DemographyTicksPerYear.Value;
     }
 
+    if (options.EconomicTickInterval.HasValue)
+    {
+        scenario.EconomicTickInterval = options.EconomicTickInterval.Value;
+    }
+
     var world = new WorldState(scenario.Seed);
     world.Initialize(scenario);
     return world;
@@ -80,7 +85,7 @@ static void PrintHelp()
     Console.WriteLine("GreenDistrict headless runner");
     Console.WriteLine();
     Console.WriteLine("Usage:");
-    Console.WriteLine("  GreenDistrict.Cli --years 1,10,50 [--scenario path] [--seed n] [--ticks-per-year n] [--demography-ticks-per-year n] [--json]");
+    Console.WriteLine("  GreenDistrict.Cli --years 1,10,50 [--scenario path] [--seed n] [--ticks-per-year n] [--demography-ticks-per-year n] [--economic-tick-interval n] [--json]");
     Console.WriteLine();
     Console.WriteLine("Options:");
     Console.WriteLine("  --years                      Comma-separated run lengths. Default: 1,10,50.");
@@ -88,6 +93,7 @@ static void PrintHelp()
     Console.WriteLine("  --seed                       Override scenario seed.");
     Console.WriteLine("  --ticks-per-year             Ticks to run per game year. Default: 525600.");
     Console.WriteLine("  --demography-ticks-per-year  Override annual demography cadence in scenario.");
+    Console.WriteLine("  --economic-tick-interval     Override how often economy runs, in game ticks. Default: scenario value.");
     Console.WriteLine("  --json                       Print JSON summary.");
 }
 
@@ -98,6 +104,7 @@ internal sealed class CliOptions
     public int? Seed { get; private init; }
     public int TicksPerYear { get; private init; } = SimulationRunner.DefaultTicksPerYear;
     public int? DemographyTicksPerYear { get; private init; }
+    public int? EconomicTickInterval { get; private init; }
     public bool Json { get; private init; }
     public bool ShowHelp { get; private init; }
 
@@ -108,6 +115,7 @@ internal sealed class CliOptions
         int? seed = null;
         int ticksPerYear = SimulationRunner.DefaultTicksPerYear;
         int? demographyTicksPerYear = null;
+        int? economicTickInterval = null;
         var json = false;
         var showHelp = false;
 
@@ -138,6 +146,9 @@ internal sealed class CliOptions
                 case "--demography-ticks-per-year":
                     demographyTicksPerYear = ParsePositiveInt(ReadValue(args, ref i, arg), arg);
                     break;
+                case "--economic-tick-interval":
+                    economicTickInterval = ParsePositiveInt(ReadValue(args, ref i, arg), arg);
+                    break;
                 default:
                     throw new ArgumentException($"Unknown option '{arg}'.");
             }
@@ -155,6 +166,7 @@ internal sealed class CliOptions
             Seed = seed,
             TicksPerYear = ticksPerYear,
             DemographyTicksPerYear = demographyTicksPerYear,
+            EconomicTickInterval = economicTickInterval,
             Json = json,
             ShowHelp = showHelp
         };

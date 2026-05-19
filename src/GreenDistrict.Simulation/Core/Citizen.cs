@@ -35,6 +35,7 @@ public class Citizen
             RefreshEmploymentStatus();
         }
     } // Which business they work at (if any)
+    public float Cash { get; set; }
     public float Income { get; set; }
     public float Satisfaction { get; set; } = 50f; // 0-100%
     public float Mood { get; set; } = 50f; // 0-100%

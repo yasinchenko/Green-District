@@ -20,6 +20,9 @@ public class GovernmentSystem
         if (world.Budget < project.Cost) return false;
 
         world.Budget -= project.Cost;
+        world.LastProjectSpending += project.Cost;
+        world.LastExternalOutflow += project.Cost;
+        world.LastNetBudgetChange -= project.Cost;
         project.StartTick = world.Clock.CurrentTick;
         project.RemainingTicks = project.DurationTicks;
         project.Completed = false;
@@ -41,6 +44,9 @@ public class GovernmentSystem
             {
                 project.Completed = true;
                 world.Budget += project.Benefit;
+                world.LastProjectBenefits += project.Benefit;
+                world.LastExternalInflow += project.Benefit;
+                world.LastNetBudgetChange += project.Benefit;
                 ApplyProjectEffects(world, project);
                 world.DistrictsSystem.UpdateDistrictAggregates(world);
 
@@ -64,6 +70,9 @@ public class GovernmentSystem
 
         var refund = project.Cost * 0.5f;
         world.Budget += refund;
+        world.LastProjectRefunds += refund;
+        world.LastExternalInflow += refund;
+        world.LastNetBudgetChange += refund;
         world.Projects.Remove(project);
 
         var ev = new GameEvent($"Project {project.Name} cancelled", $"Project {project.Name} was cancelled and refunded {refund}", EventType.Political)
