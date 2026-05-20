@@ -13,7 +13,9 @@ namespace GreenDistrict.Godot.Scripts;
 
 public partial class MainDashboard : Control
 {
-    private const double AutoTicksPerSecondAt1X = 1.0;
+    private const int SpeedOneTicksPerSecond = 5;
+    private const int SpeedTwoTicksPerSecond = 60;
+    private const int SpeedThreeTicksPerSecond = 360;
     private const float CompactWidth = 1200f;
     private static readonly Vector2I[] AvailableResolutions =
     {
@@ -26,7 +28,7 @@ public partial class MainDashboard : Control
     private readonly SimulationBridge _bridge = new();
     private readonly LocalizationSystem _localization = new();
     private bool _isRunning;
-    private int _speedMultiplier = 1;
+    private int _ticksPerSecond = SpeedOneTicksPerSecond;
     private double _autoTickAccumulator;
     private int? _selectedDistrictId;
     private int? _selectedEventId;
@@ -88,7 +90,7 @@ public partial class MainDashboard : Control
     {
         if (!_isRunning) return;
 
-        _autoTickAccumulator += delta * AutoTicksPerSecondAt1X * _speedMultiplier;
+        _autoTickAccumulator += delta * _ticksPerSecond;
         var ticksToRun = (int)Math.Floor(_autoTickAccumulator);
         if (ticksToRun <= 0) return;
 
@@ -148,15 +150,15 @@ public partial class MainDashboard : Control
                 GetViewport().SetInputAsHandled();
                 break;
             case Key.Key1:
-                SetSpeed(1);
+                SetSpeed(SpeedOneTicksPerSecond);
                 GetViewport().SetInputAsHandled();
                 break;
             case Key.Key2:
-                SetSpeed(5);
+                SetSpeed(SpeedTwoTicksPerSecond);
                 GetViewport().SetInputAsHandled();
                 break;
             case Key.Key3:
-                SetSpeed(20);
+                SetSpeed(SpeedThreeTicksPerSecond);
                 GetViewport().SetInputAsHandled();
                 break;
             case Key.Tab:
@@ -399,9 +401,9 @@ public partial class MainDashboard : Control
         header.AddChild(controls);
         _playPauseButton = CreateButton(">", ToggleAutoRun, _compactLayout ? 32 : 34, T("ui.play_pause"));
         controls.AddChild(_playPauseButton);
-        _speed1Button = CreateButton(T("ui.speed_1x"), () => SetSpeed(1), _compactLayout ? 34 : 38);
-        _speed5Button = CreateButton(T("ui.speed_5x"), () => SetSpeed(5), _compactLayout ? 34 : 38);
-        _speed20Button = CreateButton(T("ui.speed_20x"), () => SetSpeed(20), _compactLayout ? 40 : 44);
+        _speed1Button = CreateButton(T("ui.speed_1x"), () => SetSpeed(SpeedOneTicksPerSecond), _compactLayout ? 34 : 38);
+        _speed5Button = CreateButton(T("ui.speed_5x"), () => SetSpeed(SpeedTwoTicksPerSecond), _compactLayout ? 34 : 38);
+        _speed20Button = CreateButton(T("ui.speed_20x"), () => SetSpeed(SpeedThreeTicksPerSecond), _compactLayout ? 40 : 44);
         controls.AddChild(_speed1Button);
         controls.AddChild(_speed5Button);
         controls.AddChild(_speed20Button);
@@ -632,9 +634,9 @@ public partial class MainDashboard : Control
         RefreshRunState();
     }
 
-    private void SetSpeed(int multiplier)
+    private void SetSpeed(int ticksPerSecond)
     {
-        _speedMultiplier = Math.Max(1, multiplier);
+        _ticksPerSecond = Math.Max(1, ticksPerSecond);
         RefreshRunState();
     }
 
@@ -777,13 +779,24 @@ public partial class MainDashboard : Control
         {
             _playPauseButton.Text = _isRunning ? "||" : ">";
             _playPauseButton.TooltipText = _isRunning
-                ? $"{T("ui.running")} {_speedMultiplier}x"
-                : $"{T("ui.paused")} {_speedMultiplier}x";
+                ? $"{T("ui.running")} {FormatSpeedLabel(_ticksPerSecond)}"
+                : $"{T("ui.paused")} {FormatSpeedLabel(_ticksPerSecond)}";
         }
 
-        ApplySpeedButtonState(_speed1Button, _speedMultiplier == 1);
-        ApplySpeedButtonState(_speed5Button, _speedMultiplier == 5);
-        ApplySpeedButtonState(_speed20Button, _speedMultiplier == 20);
+        ApplySpeedButtonState(_speed1Button, _ticksPerSecond == SpeedOneTicksPerSecond);
+        ApplySpeedButtonState(_speed5Button, _ticksPerSecond == SpeedTwoTicksPerSecond);
+        ApplySpeedButtonState(_speed20Button, _ticksPerSecond == SpeedThreeTicksPerSecond);
+    }
+
+    private static string FormatSpeedLabel(int ticksPerSecond)
+    {
+        return ticksPerSecond switch
+        {
+            SpeedOneTicksPerSecond => "5m/s",
+            SpeedTwoTicksPerSecond => "1h/s",
+            SpeedThreeTicksPerSecond => "6h/s",
+            _ => $"{ticksPerSecond}m/s"
+        };
     }
 
     private static void ApplySpeedButtonState(Button? button, bool active)
@@ -852,7 +865,7 @@ public partial class MainDashboard : Control
         districtRows.AddChild(CreateStatRow(T("ui.jobs"), $"{selectedDistrict.TotalJobs - selectedDistrict.OpenJobs}/{selectedDistrict.TotalJobs}"));
         districtRows.AddChild(CreateStatRow(T("ui.services"), FormatPercent(selectedDistrict.ServiceLevel)));
         districtRows.AddChild(CreateStatRow(T("ui.crisis"), FormatPercent(selectedDistrict.CrisisRisk), selectedDistrict.CrisisRisk > 60f ? UiTheme.Danger : UiTheme.Text));
-        AddDistrictIssueCards(_contextList, selectedDistrict);
+        AddDistrictIssueCards(_contextList, world, selectedDistrict);
         AddRecentEventRows(
             _contextList,
             world,
@@ -1042,6 +1055,8 @@ public partial class MainDashboard : Control
         governmentRows.AddChild(CreateStatRow(T("ui.analytics_income_tax"), FormatMoney(analytics.IncomeTax)));
         governmentRows.AddChild(CreateStatRow(T("ui.analytics_business_tax"), FormatMoney(analytics.BusinessTax)));
         governmentRows.AddChild(CreateStatRow(T("ui.analytics_operating_expenses"), FormatMoney(analytics.OperatingExpenses)));
+        governmentRows.AddChild(CreateStatRow(T("ui.analytics_government_local_spending"), FormatMoney(analytics.LocalGovernmentSpending)));
+        governmentRows.AddChild(CreateStatRow(T("ui.analytics_government_external_spending"), FormatMoney(analytics.ExternalGovernmentSpending), analytics.ExternalGovernmentSpending > 0f ? UiTheme.Warning : UiTheme.Text));
         governmentRows.AddChild(CreateStatRow(T("ui.analytics_projects"), $"{analytics.ActiveProjects}/{analytics.CompletedProjects}"));
 
         var moneyRows = AddPanelRows(_diagnosticsList, T("ui.analytics_money_supply"), "$");
@@ -1056,6 +1071,14 @@ public partial class MainDashboard : Control
         moneyRows.AddChild(CreateStatRow(T("ui.analytics_citizen_income"), FormatMoney(analytics.CitizenIncome)));
         moneyRows.AddChild(CreateStatRow(T("ui.analytics_business_cash"), FormatMoney(analytics.BusinessCash)));
         moneyRows.AddChild(CreateStatRow(T("ui.analytics_total_tracked"), FormatMoney(analytics.TrackedMoney)));
+
+        var diagnosis = world.Economy.Diagnose(world);
+        var diagnosisRows = AddPanelRows(_diagnosticsList, T("ui.economy_diagnosis"), "E");
+        diagnosisRows.AddChild(CreateStatRow(T("ui.economy_trend"), EconomyTrendText(diagnosis.Trend), EconomyTrendColor(diagnosis.Trend)));
+        diagnosisRows.AddChild(CreateStatRow(T("ui.economy_primary_reason"), EconomyReasonText(diagnosis.PrimaryReason), EconomyReasonColor(diagnosis.PrimaryReason)));
+        diagnosisRows.AddChild(CreateStatRow(T("ui.economy_net_external"), FormatSignedMoney(diagnosis.NetExternalFlow), diagnosis.NetExternalFlow < 0f ? UiTheme.Warning : UiTheme.Success));
+        diagnosisRows.AddChild(CreateStatRow(T("ui.economy_unmet_demand"), FormatMoney(diagnosis.UnmetDemand), diagnosis.UnmetDemand > 10f ? UiTheme.Warning : UiTheme.Success));
+        diagnosisRows.AddChild(CreateStatRow(T("ui.economy_at_risk_businesses"), diagnosis.AtRiskBusinesses.ToString(CultureInfo.InvariantCulture), diagnosis.AtRiskBusinesses > 0 ? UiTheme.Warning : UiTheme.Success));
 
         var needsRows = AddPanelRows(_diagnosticsList, T("ui.analytics_need_trends"), "+");
         AddNeedTrend(needsRows, T("ui.analytics_food"), analytics.Food, previous?.Food);
@@ -1290,10 +1313,11 @@ public partial class MainDashboard : Control
         }
     }
 
-    private void AddDistrictIssueCards(Container parent, District district)
+    private void AddDistrictIssueCards(Container parent, WorldState world, District district)
     {
         var issues = AddPanelRows(parent, T("ui.priorities"), "!");
         var added = false;
+        var diagnosis = world.Economy.Diagnose(world, district.Id);
 
         if (district.CrisisRisk >= 35f || district.HasActiveCrisis)
         {
@@ -1322,6 +1346,18 @@ public partial class MainDashboard : Control
         if (district.ServiceLevel < 60f)
         {
             issues.AddChild(CreateIssueCard(T("ui.issue.low_services"), T("ui.issue.low_services_hint"), UiTheme.Warning, "V"));
+            added = true;
+        }
+
+        if (diagnosis.PrimaryReason != EconomyDiagnosisReason.Balanced &&
+            diagnosis.PrimaryReason != EconomyDiagnosisReason.LocalSpending &&
+            diagnosis.PrimaryReason != EconomyDiagnosisReason.ExternalInflow)
+        {
+            issues.AddChild(CreateIssueCard(
+                T("ui.issue.economy_reason"),
+                Tf("ui.issue.economy_reason_hint", EconomyReasonText(diagnosis.PrimaryReason)),
+                EconomyReasonColor(diagnosis.PrimaryReason),
+                "$"));
             added = true;
         }
 
@@ -1980,6 +2016,52 @@ public partial class MainDashboard : Control
         };
     }
 
+    private string EconomyTrendText(EconomyTrend trend)
+    {
+        return trend switch
+        {
+            EconomyTrend.Growing => T("ui.economy_trend_growing"),
+            EconomyTrend.Shrinking => T("ui.economy_trend_shrinking"),
+            _ => T("ui.economy_trend_stagnant")
+        };
+    }
+
+    private string EconomyReasonText(EconomyDiagnosisReason reason)
+    {
+        return reason switch
+        {
+            EconomyDiagnosisReason.ExternalInflow => T("ui.economy_reason_external_inflow"),
+            EconomyDiagnosisReason.LocalSpending => T("ui.economy_reason_local_spending"),
+            EconomyDiagnosisReason.UnmetDemand => T("ui.economy_reason_unmet_demand"),
+            EconomyDiagnosisReason.ImportLeakage => T("ui.economy_reason_import_leakage"),
+            EconomyDiagnosisReason.BusinessRisk => T("ui.economy_reason_business_risk"),
+            EconomyDiagnosisReason.Unemployment => T("ui.economy_reason_unemployment"),
+            EconomyDiagnosisReason.PublicDeficit => T("ui.economy_reason_public_deficit"),
+            EconomyDiagnosisReason.LowCash => T("ui.economy_reason_low_cash"),
+            _ => T("ui.economy_reason_balanced")
+        };
+    }
+
+    private static Color EconomyTrendColor(EconomyTrend trend)
+    {
+        return trend switch
+        {
+            EconomyTrend.Growing => UiTheme.Success,
+            EconomyTrend.Shrinking => UiTheme.Danger,
+            _ => UiTheme.Warning
+        };
+    }
+
+    private static Color EconomyReasonColor(EconomyDiagnosisReason reason)
+    {
+        return reason switch
+        {
+            EconomyDiagnosisReason.ExternalInflow or EconomyDiagnosisReason.LocalSpending or EconomyDiagnosisReason.Balanced => UiTheme.Success,
+            EconomyDiagnosisReason.BusinessRisk or EconomyDiagnosisReason.ImportLeakage => UiTheme.Danger,
+            _ => UiTheme.Warning
+        };
+    }
+
     private string DistrictName(WorldState world, int districtId)
     {
         return world.Districts.FirstOrDefault(d => d.Id == districtId)?.Name ?? T("ui.unknown_district");
@@ -2037,6 +2119,8 @@ public partial class MainDashboard : Control
         public float IncomeTax { get; private init; }
         public float BusinessTax { get; private init; }
         public float OperatingExpenses { get; private init; }
+        public float LocalGovernmentSpending { get; private init; }
+        public float ExternalGovernmentSpending { get; private init; }
         public int ActiveProjects { get; private init; }
         public int CompletedProjects { get; private init; }
         public float CitizenIncome { get; private init; }
@@ -2102,6 +2186,8 @@ public partial class MainDashboard : Control
                 IncomeTax = world.LastIncomeTaxCollected,
                 BusinessTax = world.LastBusinessTaxCollected,
                 OperatingExpenses = world.LastOperatingExpenses,
+                LocalGovernmentSpending = world.LastLocalGovernmentSpending,
+                ExternalGovernmentSpending = world.LastExternalGovernmentSpending,
                 ActiveProjects = world.Projects.Count(project => !project.Completed),
                 CompletedProjects = world.Projects.Count(project => project.Completed),
                 CitizenIncome = citizenIncome,

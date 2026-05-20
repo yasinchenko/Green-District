@@ -17,6 +17,10 @@ public class Household
     public int HousingCapacity { get; set; }
     public float RentPerTick { get; set; }
     public float TotalIncome { get; private set; }
+    public float AvailableMoney { get; private set; }
+    public float MandatoryExpenses { get; private set; }
+    public float DiscretionarySpending { get; private set; }
+    public float Savings { get; private set; }
     public float PerCapitaIncome => MemberCount == 0 ? 0f : TotalIncome / MemberCount;
     public List<int> MemberIds { get; } = new();
 
@@ -42,8 +46,16 @@ public class Household
     {
         if (citizens == null) throw new ArgumentNullException(nameof(citizens));
 
-        TotalIncome = citizens
+        var members = citizens
             .Where(c => MemberIds.Contains(c.Id))
-            .Sum(c => c.Income);
+            .ToList();
+
+        TotalIncome = members.Sum(c => c.Income);
+        AvailableMoney = members.Sum(c => Math.Max(0f, c.Cash));
+        MandatoryExpenses = Math.Max(0f, RentPerTick);
+
+        var afterMandatory = Math.Max(0f, AvailableMoney - MandatoryExpenses);
+        DiscretionarySpending = afterMandatory * 0.35f;
+        Savings = Math.Max(0f, afterMandatory - DiscretionarySpending);
     }
 }

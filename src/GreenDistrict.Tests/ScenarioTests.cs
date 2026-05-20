@@ -17,19 +17,25 @@ public class ScenarioTests
 
         Assert.Equal(10000f, world.Budget);
         Assert.Equal(75f, world.SupportRating);
-        Assert.Single(world.Districts);
-        Assert.Equal(4, world.Businesses.Count);
+        Assert.True(world.Districts.Count >= 3);
+        Assert.Equal(6, world.Businesses.Count);
         Assert.Equal(50, world.Citizens.Count);
         Assert.True(world.Households.Count >= 12);
         Assert.True(world.HousingUnits.Sum(h => h.Capacity) >= 50);
-        Assert.Single(world.Projects);
+        Assert.Equal(3, world.Projects.Count);
         Assert.Contains(world.Businesses, b => b.Name == "Central Farm" && b.BaseOutput > 0f && b.UnitPrice > 0f);
         Assert.Contains(world.Citizens, c => c.Name == "Maria Green" && c.EmploymentStatus == EmploymentStatus.Employed);
         Assert.Contains(world.Households, h => h.MemberCount == 3 && h.HousingCapacity == 4);
         Assert.Contains(world.HousingUnits, h => h.Id == 1 && h.IsOccupied);
-        Assert.All(world.Businesses, b => Assert.Equal(1, b.DistrictId));
-        Assert.All(world.Citizens, c => Assert.Equal(1, c.DistrictId));
+        Assert.Contains(world.Businesses, b => b.DistrictId == 1);
+        Assert.Contains(world.Businesses, b => b.DistrictId == 2);
+        Assert.Contains(world.Businesses, b => b.DistrictId == 3);
+        Assert.Contains(world.Citizens, c => c.DistrictId == 1);
+        Assert.Contains(world.Citizens, c => c.DistrictId == 2);
+        Assert.Contains(world.Citizens, c => c.DistrictId == 3);
         Assert.Contains(world.Projects, p => p.Type == ProjectType.Park && p.DistrictId == 1);
+        Assert.Contains(world.Projects, p => p.Type == ProjectType.Housing && p.DistrictId == 2);
+        Assert.Contains(world.Projects, p => p.Type == ProjectType.Police && p.DistrictId == 3);
     }
 
     [Fact]
@@ -110,9 +116,15 @@ public class ScenarioTests
         Assert.NotEmpty(world.Households);
         Assert.NotEmpty(world.HousingUnits);
         Assert.NotEmpty(world.Projects);
+        Assert.True(world.Districts.Count >= 3);
         Assert.Equal(50, world.GetTotalPopulation());
         Assert.True(world.HousingUnits.Sum(h => h.Capacity) >= world.GetTotalPopulation());
         Assert.True(world.Businesses.Sum(b => b.MaxEmployees) >= world.Citizens.Count(c => c.LifeStage == LifeStage.Adult && !c.IsRetired));
+        Assert.All(world.Districts, district =>
+        {
+            Assert.Contains(world.Citizens, citizen => citizen.DistrictId == district.Id);
+            Assert.Contains(world.Businesses, business => business.DistrictId == district.Id);
+        });
     }
 
     [Fact]
@@ -124,9 +136,34 @@ public class ScenarioTests
         world.Initialize(scenario);
 
         Assert.Equal(50, world.GetTotalPopulation());
+        Assert.True(world.Districts.Count >= 3);
         Assert.True(world.Households.Count >= 12);
         Assert.True(world.HousingUnits.Sum(h => h.Capacity) >= 50);
+        Assert.All(world.Districts, district => Assert.True(district.Population > 0));
         Assert.InRange(world.LastUnemploymentRate, 0f, 25f);
+    }
+
+    [Fact]
+    public void BuiltIn_DefaultScenario_Starts_With_Distinct_District_Problems()
+    {
+        var scenario = WorldScenarioLoader.CreateDefault();
+        var world = new WorldState();
+
+        world.Initialize(scenario);
+
+        var central = Assert.Single(world.Districts, d => d.Name == "Central");
+        var north = Assert.Single(world.Districts, d => d.Name == "North Residential");
+        var south = Assert.Single(world.Districts, d => d.Name == "South Works");
+        var northWorkforce = world.Citizens.Count(c =>
+            c.DistrictId == north.Id &&
+            c.LifeStage == LifeStage.Adult &&
+            !c.IsRetired);
+
+        Assert.InRange(central.AverageEntertainmentSatisfaction, 0f, 55f);
+        Assert.InRange(north.AverageHousingSatisfaction, 0f, 55f);
+        Assert.InRange(north.AverageHealthcareSatisfaction, 0f, 60f);
+        Assert.True(north.TotalJobs < northWorkforce, "North Residential should start with fewer local jobs than resident workers.");
+        Assert.InRange(south.AverageSafetySatisfaction, 0f, 50f);
     }
 
     [Fact]

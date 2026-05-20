@@ -45,7 +45,33 @@ public static class WorldScenarioLoader
             InitialPopulation = 50,
             Districts =
             {
-                new DistrictScenario { Id = 1, Name = "Central" }
+                new DistrictScenario
+                {
+                    Id = 1,
+                    Name = "Central",
+                    HousingSatisfaction = 72f,
+                    SafetySatisfaction = 68f,
+                    HealthcareSatisfaction = 70f,
+                    EntertainmentSatisfaction = 45f
+                },
+                new DistrictScenario
+                {
+                    Id = 2,
+                    Name = "North Residential",
+                    HousingSatisfaction = 42f,
+                    SafetySatisfaction = 64f,
+                    HealthcareSatisfaction = 48f,
+                    EntertainmentSatisfaction = 58f
+                },
+                new DistrictScenario
+                {
+                    Id = 3,
+                    Name = "South Works",
+                    HousingSatisfaction = 64f,
+                    SafetySatisfaction = 38f,
+                    HealthcareSatisfaction = 62f,
+                    EntertainmentSatisfaction = 52f
+                }
             },
             Businesses =
             {
@@ -61,6 +87,7 @@ public static class WorldScenarioLoader
                     BaseOutput = 2500f,
                     UnitPrice = 2f,
                     DemandMultiplier = 0.85f,
+                    Cash = 50000f,
                     Revenue = 5000f
                 },
                 new BusinessScenario
@@ -75,20 +102,22 @@ public static class WorldScenarioLoader
                     BaseOutput = 300f,
                     UnitPrice = 5f,
                     DemandMultiplier = 0.9f,
+                    Cash = 50000f,
                     Revenue = 3500f
                 },
                 new BusinessScenario
                 {
                     Id = 3,
-                    Name = "Central Workshop",
+                    Name = "South Workshop",
                     Type = "workshop",
-                    MaxEmployees = 12,
-                    DistrictId = 1,
+                    MaxEmployees = 14,
+                    DistrictId = 3,
                     WagePerEmployee = 36f,
                     ProductionType = "goods",
                     BaseOutput = 650f,
                     UnitPrice = 4f,
                     DemandMultiplier = 0.8f,
+                    Cash = 50000f,
                     Revenue = 4200f
                 },
                 new BusinessScenario
@@ -103,21 +132,57 @@ public static class WorldScenarioLoader
                     BaseOutput = 220f,
                     UnitPrice = 7f,
                     DemandMultiplier = 0.75f,
+                    Cash = 50000f,
                     Revenue = 3600f
+                },
+                new BusinessScenario
+                {
+                    Id = 5,
+                    Name = "North Market",
+                    Type = "shop",
+                    MaxEmployees = 10,
+                    DistrictId = 2,
+                    WagePerEmployee = 34f,
+                    ProductionType = "trade",
+                    BaseOutput = 220f,
+                    UnitPrice = 5f,
+                    DemandMultiplier = 0.7f,
+                    Cash = 50000f,
+                    Revenue = 2600f
+                },
+                new BusinessScenario
+                {
+                    Id = 6,
+                    Name = "South Depot",
+                    Type = "factory",
+                    MaxEmployees = 12,
+                    DistrictId = 3,
+                    WagePerEmployee = 37f,
+                    ProductionType = "goods",
+                    BaseOutput = 520f,
+                    UnitPrice = 4f,
+                    DemandMultiplier = 0.65f,
+                    Cash = 50000f,
+                    Revenue = 3000f
                 }
             },
             HousingUnits =
             {
                 new HousingUnitScenario { Id = 1, DistrictId = 1, Capacity = 4, RentPerTick = 20f },
                 new HousingUnitScenario { Id = 2, DistrictId = 1, Capacity = 2, RentPerTick = 25f },
-                new HousingUnitScenario { Id = 3, DistrictId = 1, Capacity = 3, RentPerTick = 30f }
+                new HousingUnitScenario { Id = 3, DistrictId = 1, Capacity = 3, RentPerTick = 30f },
+                new HousingUnitScenario { Id = 4, DistrictId = 2, Capacity = 4, RentPerTick = 18f },
+                new HousingUnitScenario { Id = 5, DistrictId = 2, Capacity = 3, RentPerTick = 20f },
+                new HousingUnitScenario { Id = 6, DistrictId = 3, Capacity = 3, RentPerTick = 16f }
             },
             Citizens =
             {
                 new CitizenScenario { Name = "Maria Green", Age = 29, Profession = "Worker", Gender = "Female", DistrictId = 1, Job = "Central Farm" },
                 new CitizenScenario { Name = "Ivan Green", Age = 31, Profession = "Worker", Gender = "Male", DistrictId = 1, Job = "Central Farm" },
                 new CitizenScenario { Name = "Sofia Green", Age = 7, Profession = "Child", Gender = "Female", DistrictId = 1 },
-                new CitizenScenario { Name = "Anna Green", Age = 35, Profession = "Trader", Gender = "Female", DistrictId = 1, Job = "Central Shop" }
+                new CitizenScenario { Name = "Anna Green", Age = 35, Profession = "Trader", Gender = "Female", DistrictId = 2, Job = "North Market" },
+                new CitizenScenario { Name = "Dmitry Forge", Age = 42, Profession = "Worker", Gender = "Male", DistrictId = 3, Job = "South Workshop" },
+                new CitizenScenario { Name = "Elena Forge", Age = 39, Profession = "Worker", Gender = "Female", DistrictId = 3, Job = "South Depot" }
             },
             Households =
             {
@@ -131,11 +196,19 @@ public static class WorldScenarioLoader
                 },
                 new HouseholdScenario
                 {
-                    DistrictId = 1,
-                    HousingUnitId = 2,
-                    HousingCapacity = 2,
-                    RentPerTick = 25f,
+                    DistrictId = 2,
+                    HousingUnitId = 4,
+                    HousingCapacity = 4,
+                    RentPerTick = 18f,
                     MemberNames = { "Anna Green" }
+                },
+                new HouseholdScenario
+                {
+                    DistrictId = 3,
+                    HousingUnitId = 6,
+                    HousingCapacity = 3,
+                    RentPerTick = 16f,
+                    MemberNames = { "Dmitry Forge", "Elena Forge" }
                 }
             },
             Projects =
@@ -147,6 +220,24 @@ public static class WorldScenarioLoader
                     Type = "Park",
                     DistrictId = 1,
                     RemainingTicks = 25,
+                    StartTick = -1
+                },
+                new ProjectScenario
+                {
+                    Id = 2,
+                    Name = "North Housing Block",
+                    Type = "Housing",
+                    DistrictId = 2,
+                    RemainingTicks = 35,
+                    StartTick = -1
+                },
+                new ProjectScenario
+                {
+                    Id = 3,
+                    Name = "South Safety Office",
+                    Type = "Police",
+                    DistrictId = 3,
+                    RemainingTicks = 30,
                     StartTick = -1
                 }
             }

@@ -14,6 +14,9 @@ public class DemographySystem
 {
     private static readonly string[] FemaleNames = ["Anna", "Maria", "Elena", "Sofia", "Nina"];
     private static readonly string[] MaleNames = ["Alex", "Ivan", "Mikhail", "Nikolai", "Sergey"];
+    private static readonly string[] MigrantFamilyNames = ["Stone", "Field", "Brook", "Hill", "Lane"];
+    private const float MigrantStartingCashMin = 80f;
+    private const float MigrantStartingCashMax = 220f;
 
     public int TicksPerYear { get; }
     public float BirthRatePerPersonPerYear { get; }
@@ -114,6 +117,8 @@ public class DemographySystem
                 }
             }
         }
+
+        TryCreateExternalMigrant(world);
     }
 
     private static void RemoveCitizen(WorldState world, Citizen citizen)
@@ -316,6 +321,64 @@ public class DemographySystem
         return world.Businesses
             .Where(b => b.DistrictId == districtId && b.Status == BusinessStatus.Active)
             .Sum(b => Math.Max(0, b.MaxEmployees - b.EmployeeIds.Count));
+    }
+
+    private void TryCreateExternalMigrant(WorldState world)
+    {
+        if (MigrationRatePerPersonPerYear <= 0f) return;
+        if (world.Districts.Count == 0) return;
+
+        var candidates = world.Districts
+            .Select(d => new
+            {
+                District = d,
+                OpenJobs = CountOpenJobs(world, d.Id),
+                Housing = FindBestAvailableHousing(world, d.Id, 1),
+                Score = ScoreDistrictBase(world, d.Id)
+            })
+            .Where(option => option.OpenJobs > 0 && option.Housing != null)
+            .OrderByDescending(option => option.Score)
+            .ThenByDescending(option => option.OpenJobs)
+            .ToList();
+
+        if (candidates.Count == 0) return;
+
+        var populationFactor = Math.Max(1, world.Citizens.Count);
+        var probability = Math.Clamp(MigrationRatePerPersonPerYear * populationFactor, 0f, 0.35f);
+        if (_rng.NextDouble() >= probability) return;
+
+        var target = candidates[0];
+        var gender = _rng.NextDouble() < 0.5 ? Gender.Female : Gender.Male;
+        var familyName = MigrantFamilyNames[_rng.Next(MigrantFamilyNames.Length)];
+        var cash = MigrantStartingCashMin + (float)_rng.NextDouble() * (MigrantStartingCashMax - MigrantStartingCashMin);
+        var migrant = new Citizen($"{GenerateFirstName(gender)} {familyName}", _rng.Next(22, 46), "Worker", gender)
+        {
+            DistrictId = target.District.Id,
+            Cash = cash,
+            Income = cash,
+            FoodSatisfaction = 65f,
+            HousingSatisfaction = 65f,
+            SafetySatisfaction = Math.Clamp(target.District.AverageSafetySatisfaction <= 0f ? 65f : target.District.AverageSafetySatisfaction, 35f, 85f),
+            HealthcareSatisfaction = 60f,
+            EntertainmentSatisfaction = 55f
+        };
+        migrant.RecalculateSatisfaction();
+
+        world.Citizens.Add(migrant);
+        var household = world.CreateHousehold(target.District.Id, new[] { migrant });
+        if (target.Housing != null)
+        {
+            world.AssignHouseholdToHousingUnit(household, target.Housing);
+        }
+
+        world.LastExternalInflow += cash;
+        world.Events.Add(new GameEvent(
+            $"Migration: {migrant.Name}",
+            $"{migrant.Name} moved to {target.District.Name} with {cash:F0} in savings.",
+            EventType.Social)
+        {
+            CreatedAtTick = world.Clock.CurrentTick
+        });
     }
 
     private static HousingUnit? FindBestAvailableHousing(WorldState world, int districtId, int householdSize)

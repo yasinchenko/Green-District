@@ -1,6 +1,7 @@
 using System;
 using System.Linq;
 using GreenDistrict.Simulation.Core;
+using GreenDistrict.Simulation.Persistence;
 using GreenDistrict.Simulation.Scenarios;
 using Xunit;
 
@@ -117,6 +118,51 @@ public class BalanceTests
             Assert.True(float.IsFinite(run.UnemploymentRate), $"Unemployment became non-finite after {run.YearsRun} years.");
             Assert.InRange(run.UnemploymentRate, 0f, 100f);
         }
+    }
+
+    [Fact]
+    public void DefaultScenario_StandardGameplayLoop_Survives_OneHundred_Days()
+    {
+        var world = CreateDefaultWorld();
+        var initialPopulation = world.GetTotalPopulation();
+        var initialBusinesses = world.Businesses.Count;
+
+        SimulationRunner.Run(world, ticksToRun: 100 * TicksPerDay);
+
+        Assert.Equal(100 * TicksPerDay, world.Clock.CurrentTick);
+        Assert.InRange(world.GetTotalPopulation(), (int)Math.Floor(initialPopulation * 0.5f), initialPopulation * 2);
+        Assert.Equal(initialBusinesses, world.Businesses.Count);
+        Assert.True(world.Businesses.Count(business => business.Status == BusinessStatus.Active) >= initialBusinesses / 2);
+        Assert.True(float.IsFinite(world.Budget));
+        Assert.InRange(world.Budget, -100_000f, 5_000_000f);
+        Assert.True(float.IsFinite(world.SupportRating));
+        Assert.InRange(world.SupportRating, 0f, 100f);
+        Assert.True(float.IsFinite(world.GetAverageSatisfaction()));
+        Assert.InRange(world.GetAverageSatisfaction(), 20f, 100f);
+        Assert.NotNull(world.MapAccessibility);
+    }
+
+    [Fact]
+    public void DefaultScenario_Can_Save_Load_And_Continue_After_Long_Run()
+    {
+        var world = CreateDefaultWorld();
+
+        SimulationRunner.Run(world, ticksToRun: 30 * TicksPerDay);
+        var savedAtTick = world.Clock.CurrentTick;
+        var json = WorldStateSerializer.SaveJson(world);
+
+        var loaded = WorldStateSerializer.LoadJson(json);
+        var project = GovernmentProject.CreateTyped(ProjectType.Road, loaded.Districts[0].Id);
+        var started = loaded.Government.StartProject(loaded, project);
+        SimulationRunner.Run(loaded, ticksToRun: 3 * TicksPerDay);
+
+        Assert.Equal(savedAtTick + 3 * TicksPerDay, loaded.Clock.CurrentTick);
+        Assert.True(started);
+        Assert.Contains(loaded.Projects, p => p.Id == project.Id);
+        Assert.NotNull(loaded.MapAccessibility);
+        Assert.True(float.IsFinite(loaded.Budget));
+        Assert.True(loaded.GetTotalPopulation() > 0);
+        Assert.Contains(loaded.Businesses, business => business.Status == BusinessStatus.Active);
     }
 
     private static WorldState CreateBalancedDefaultWorld()

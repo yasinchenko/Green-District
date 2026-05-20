@@ -76,6 +76,8 @@ public static class WorldStateSerializer
             LastProjectSpending = world.LastProjectSpending,
             LastProjectBenefits = world.LastProjectBenefits,
             LastProjectRefunds = world.LastProjectRefunds,
+            LastLocalGovernmentSpending = world.LastLocalGovernmentSpending,
+            LastExternalGovernmentSpending = world.LastExternalGovernmentSpending,
             LastConsumerSpending = world.LastConsumerSpending,
             LastExternalInflow = world.LastExternalInflow,
             LastExternalOutflow = world.LastExternalOutflow,
@@ -132,6 +134,7 @@ public static class WorldStateSerializer
                 SupportRating = districtSave.SupportRating,
                 CrisisRisk = districtSave.CrisisRisk,
                 HasActiveCrisis = districtSave.HasActiveCrisis,
+                LastCrisisEventTick = districtSave.LastCrisisEventTick,
                 TotalJobs = districtSave.TotalJobs,
                 OpenJobs = districtSave.OpenJobs,
                 EmploymentRate = districtSave.EmploymentRate,
@@ -248,6 +251,8 @@ public static class WorldStateSerializer
                 HousingUnitsToCreate = projectSave.HousingUnitsToCreate,
                 HousingUnitCapacity = projectSave.HousingUnitCapacity,
                 HousingUnitRentPerTick = projectSave.HousingUnitRentPerTick,
+                LocalCostPaid = projectSave.LocalCostPaid,
+                ExternalCostPaid = projectSave.ExternalCostPaid,
                 Completed = projectSave.Completed,
                 StartTick = projectSave.StartTick
             });
@@ -279,6 +284,8 @@ public static class WorldStateSerializer
             save.LastProjectSpending,
             save.LastProjectBenefits,
             save.LastProjectRefunds,
+            save.LastLocalGovernmentSpending,
+            save.LastExternalGovernmentSpending,
             save.LastConsumerSpending,
             save.LastExternalInflow,
             save.LastExternalOutflow,
@@ -286,6 +293,7 @@ public static class WorldStateSerializer
             save.LastElectionTick,
             save.LastElectionSupport,
             save.ElectionCount);
+        world.RefreshMapAccessibility();
         return world;
     }
 
@@ -349,6 +357,7 @@ public static class WorldStateSerializer
         SupportRating = district.SupportRating,
         CrisisRisk = district.CrisisRisk,
         HasActiveCrisis = district.HasActiveCrisis,
+        LastCrisisEventTick = district.LastCrisisEventTick,
         TotalJobs = district.TotalJobs,
         OpenJobs = district.OpenJobs,
         EmploymentRate = district.EmploymentRate,
@@ -413,6 +422,8 @@ public static class WorldStateSerializer
         HousingUnitsToCreate = project.HousingUnitsToCreate,
         HousingUnitCapacity = project.HousingUnitCapacity,
         HousingUnitRentPerTick = project.HousingUnitRentPerTick,
+        LocalCostPaid = project.LocalCostPaid,
+        ExternalCostPaid = project.ExternalCostPaid,
         Completed = project.Completed,
         StartTick = project.StartTick
     };
@@ -488,6 +499,8 @@ public class WorldSave
     public float LastProjectSpending { get; set; }
     public float LastProjectBenefits { get; set; }
     public float LastProjectRefunds { get; set; }
+    public float LastLocalGovernmentSpending { get; set; }
+    public float LastExternalGovernmentSpending { get; set; }
     public float LastConsumerSpending { get; set; }
     public float LastExternalInflow { get; set; }
     public float LastExternalOutflow { get; set; }
@@ -564,6 +577,7 @@ public class DistrictSave
     public float SupportRating { get; set; }
     public float CrisisRisk { get; set; }
     public bool HasActiveCrisis { get; set; }
+    public long LastCrisisEventTick { get; set; } = long.MinValue;
     public int TotalJobs { get; set; }
     public int OpenJobs { get; set; }
     public float EmploymentRate { get; set; }
@@ -628,6 +642,8 @@ public class ProjectSave
     public int HousingUnitsToCreate { get; set; }
     public int HousingUnitCapacity { get; set; }
     public float HousingUnitRentPerTick { get; set; }
+    public float LocalCostPaid { get; set; }
+    public float ExternalCostPaid { get; set; }
     public bool Completed { get; set; }
     public long StartTick { get; set; }
 }

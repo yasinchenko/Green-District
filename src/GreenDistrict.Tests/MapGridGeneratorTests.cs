@@ -1,6 +1,7 @@
 using System.Linq;
 using GreenDistrict.Simulation.Core;
 using GreenDistrict.Simulation.Map;
+using GreenDistrict.Simulation.Scenarios;
 using Xunit;
 
 namespace GreenDistrict.Tests;
@@ -18,6 +19,24 @@ public class MapGridGeneratorTests
         foreach (var district in world.Districts)
         {
             Assert.Contains(result.Grid.Cells, cell => cell.DistrictId == district.Id);
+        }
+    }
+
+    [Fact]
+    public void DefaultScenario_Generator_Builds_All_Districts_With_Roads_And_Objects()
+    {
+        var scenario = WorldScenarioLoader.CreateDefault();
+        var world = new WorldState(scenario.Seed);
+        world.Initialize(scenario);
+
+        var result = new MapGridGenerator().Generate(world, new MapGridGenerationOptions(180, 120));
+
+        Assert.Equal(world.Districts.Count, result.DistrictAreas.Count);
+        foreach (var district in world.Districts)
+        {
+            Assert.Contains(result.Grid.Cells, cell => cell.DistrictId == district.Id);
+            Assert.Contains(result.Grid.Cells, cell => cell.DistrictId == district.Id && cell.HasRoad);
+            Assert.Contains(result.Grid.Objects.Values, mapObject => mapObject.DistrictId == district.Id);
         }
     }
 

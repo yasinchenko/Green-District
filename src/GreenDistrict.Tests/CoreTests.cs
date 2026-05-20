@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Xunit;
 using GreenDistrict.Simulation.Core;
 
@@ -251,8 +252,8 @@ public class WorldStateTests
     public void WorldState_CreateHousehold_Tracks_Members_Housing_And_Income()
     {
         var world = new WorldState();
-        var adult = new Citizen("Alice", 30, "Worker") { Income = 1000f };
-        var child = new Citizen("Bob", 8, "Child") { Income = 0f };
+        var adult = new Citizen("Alice", 30, "Worker") { Income = 1000f, Cash = 600f };
+        var child = new Citizen("Bob", 8, "Child") { Income = 0f, Cash = 100f };
         world.Citizens.Add(adult);
         world.Citizens.Add(child);
 
@@ -272,6 +273,10 @@ public class WorldStateTests
         Assert.True(household.IsOvercrowded);
         Assert.Equal(1000f, household.TotalIncome);
         Assert.Equal(500f, household.PerCapitaIncome);
+        Assert.Equal(700f, household.AvailableMoney);
+        Assert.Equal(25f, household.MandatoryExpenses);
+        Assert.Equal(236.25f, household.DiscretionarySpending);
+        Assert.Equal(438.75f, household.Savings);
         Assert.Equal(household.Id, adult.HouseholdId);
         Assert.Equal(household.Id, child.HouseholdId);
     }
@@ -280,20 +285,24 @@ public class WorldStateTests
     public void WorldState_RecalculateHouseholds_Removes_Stale_Members_And_Updates_Income()
     {
         var world = new WorldState();
-        var adult = new Citizen("Alice", 30, "Worker") { Income = 1000f };
-        var secondAdult = new Citizen("Bob", 32, "Worker") { Income = 500f };
+        var adult = new Citizen("Alice", 30, "Worker") { Income = 1000f, Cash = 200f };
+        var secondAdult = new Citizen("Bob", 32, "Worker") { Income = 500f, Cash = 300f };
         world.Citizens.Add(adult);
         world.Citizens.Add(secondAdult);
         var household = world.CreateHousehold(1, new[] { adult, secondAdult });
 
         world.Citizens.Remove(secondAdult);
         adult.Income = 1200f;
+        adult.Cash = 400f;
         world.RecalculateHouseholds();
 
         Assert.Single(household.MemberIds);
         Assert.Contains(adult.Id, household.MemberIds);
         Assert.Equal(1200f, household.TotalIncome);
         Assert.Equal(1200f, household.PerCapitaIncome);
+        Assert.Equal(400f, household.AvailableMoney);
+        Assert.Equal(140f, household.DiscretionarySpending);
+        Assert.Equal(260f, household.Savings);
     }
 
     [Fact]
@@ -312,6 +321,7 @@ public class WorldStateTests
         Assert.Equal(77, household.HousingUnitId);
         Assert.Equal(2, household.HousingCapacity);
         Assert.Equal(40f, household.RentPerTick);
+        Assert.Equal(40f, household.MandatoryExpenses);
         Assert.Equal(3, household.DistrictId);
         Assert.Equal(3, adult.DistrictId);
     }
@@ -332,6 +342,7 @@ public class WorldStateTests
         Assert.Null(household.HousingUnitId);
         Assert.Equal(0, household.HousingCapacity);
         Assert.Equal(0f, household.RentPerTick);
+        Assert.Equal(0f, household.MandatoryExpenses);
     }
 
     [Fact]
@@ -471,6 +482,106 @@ public class WorldStateTests
         Assert.False(district.HasActiveCrisis);
         Assert.Equal(9500f, world.Budget);
         Assert.True(world.SupportRating > 75f);
+    }
+
+    [Fact]
+    public void CrisisProgression_Uses_Dominant_Reason_And_Cooldown_After_Resolution()
+    {
+        var world = new WorldState();
+        var district = new District("North")
+        {
+            Id = 1,
+            Population = 5,
+            SupportRating = 80f,
+            AverageSafetySatisfaction = 0f,
+            ServiceLevel = 80f,
+            EmploymentRate = 80f
+        };
+        world.Districts.Add(district);
+        world.Citizens.Add(new Citizen("A", 30, "Worker")
+        {
+            DistrictId = 1,
+            SafetySatisfaction = 10f
+        });
+
+        world.UpdateManager.ExecutePhase(UpdatePhase.CrisisProgression);
+        var crisis = Assert.Single(world.Events, e => e.Type == EventType.Crisis);
+
+        Assert.Contains("safety", crisis.Title, StringComparison.OrdinalIgnoreCase);
+
+        Assert.True(world.ResolveEventChoice(crisis.Id, "fund-response"));
+        district.SupportRating = 80f;
+        district.AverageSafetySatisfaction = 0f;
+        district.ServiceLevel = 80f;
+        district.EmploymentRate = 80f;
+
+        world.UpdateManager.ExecutePhase(UpdatePhase.CrisisProgression);
+
+        Assert.Single(world.Events, e => e.Type == EventType.Crisis);
+
+        world.Clock.AdvanceTicks(1440 * 14);
+        world.UpdateManager.ExecutePhase(UpdatePhase.CrisisProgression);
+
+        Assert.Equal(2, world.Events.Count(e => e.Type == EventType.Crisis));
+    }
+
+    [Fact]
+    public void NotificationGeneration_Creates_World_Decision_Event_With_Visible_Effect()
+    {
+        var world = new WorldState(simulationSeed: 2);
+        world.Clock.AdvanceTicks(1440 * 21);
+
+        world.UpdateManager.ExecutePhase(UpdatePhase.NotificationGeneration);
+
+        var decision = Assert.Single(world.Events, e => e.Type == EventType.Decision);
+        Assert.True(decision.HasChoices);
+        Assert.Contains(decision.Choices, choice => choice.Id == "accept-investment");
+
+        var resolved = world.ResolveEventChoice(decision.Id, "accept-investment");
+
+        Assert.True(resolved);
+        Assert.True(decision.IsResolved);
+        Assert.Equal(11200f, world.Budget);
+        Assert.Equal(1200f, world.LastExternalInflow);
+        Assert.Equal(1200f, world.LastNetBudgetChange);
+        Assert.True(world.SupportRating > 75f);
+    }
+
+    [Fact]
+    public void NotificationGeneration_Does_Not_Add_New_World_Event_While_Decision_Is_Open()
+    {
+        var world = new WorldState(simulationSeed: 2);
+        world.Clock.AdvanceTicks(1440 * 21);
+
+        world.UpdateManager.ExecutePhase(UpdatePhase.NotificationGeneration);
+        world.Clock.AdvanceTicks(1440 * 21);
+        world.UpdateManager.ExecutePhase(UpdatePhase.NotificationGeneration);
+
+        Assert.Single(world.Events, e => e.Type == EventType.Decision);
+    }
+
+    [Fact]
+    public void CrisisProgression_Adds_External_Aid_When_City_Budget_Is_Negative()
+    {
+        var world = new WorldState { Budget = -250f };
+        var district = new District("North")
+        {
+            Id = 1,
+            Population = 5,
+            SupportRating = 10f,
+            AverageSafetySatisfaction = 10f,
+            ServiceLevel = 10f,
+            EmploymentRate = 10f
+        };
+        world.Districts.Add(district);
+
+        world.UpdateManager.ExecutePhase(UpdatePhase.CrisisProgression);
+
+        Assert.True(district.HasActiveCrisis);
+        Assert.Equal(750f, world.Budget);
+        Assert.Equal(1000f, world.LastExternalInflow);
+        Assert.Equal(1000f, world.LastNetBudgetChange);
+        Assert.Contains(world.Events, gameEvent => gameEvent.Title == "Crisis aid for North");
     }
 
     [Fact]

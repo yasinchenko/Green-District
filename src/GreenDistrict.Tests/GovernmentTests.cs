@@ -21,7 +21,33 @@ public class GovernmentTests
         Assert.Equal(8000f, world.Budget); // 10000 - 2000
         Assert.Equal(2000f, world.LastProjectSpending);
         Assert.Equal(2000f, world.LastExternalOutflow);
+        Assert.Equal(2000f, world.LastExternalGovernmentSpending);
+        Assert.Equal(0f, world.LastLocalGovernmentSpending);
         Assert.Equal(-2000f, world.LastNetBudgetChange);
+    }
+
+    [Fact]
+    public void StartProject_Pays_Local_Project_Share_To_Local_Suppliers()
+    {
+        var world = new WorldState();
+        var govt = new GovernmentSystem();
+        var supplier = new Business("Builder", "factory", 5) { Id = 1, DistrictId = 3, Cash = 100f };
+        world.Businesses.Add(supplier);
+        var project = new GovernmentProject("Clinic", 1000f, 2) { DistrictId = 3 };
+
+        var started = govt.StartProject(world, project);
+
+        Assert.True(started);
+        Assert.Equal(9000f, world.Budget);
+        Assert.Equal(600f, project.LocalCostPaid);
+        Assert.Equal(400f, project.ExternalCostPaid);
+        Assert.Equal(600f, supplier.Revenue);
+        Assert.Equal(700f, supplier.Cash);
+        Assert.Equal(600f, world.LastLocalGovernmentSpending);
+        Assert.Equal(400f, world.LastExternalGovernmentSpending);
+        Assert.Equal(600f, world.LastInternalTransfers);
+        Assert.Equal(400f, world.LastExternalOutflow);
+        Assert.Equal(-1000f, world.LastNetBudgetChange);
     }
 
     [Fact]
@@ -178,7 +204,28 @@ public class GovernmentTests
         Assert.Equal(250f, world.LastProjectRefunds);
         Assert.Equal(250f, world.LastExternalInflow);
         Assert.Equal(500f, world.LastExternalOutflow);
+        Assert.Equal(500f, world.LastExternalGovernmentSpending);
         Assert.Equal(-250f, world.LastNetBudgetChange);
         Assert.DoesNotContain(project, world.Projects);
+    }
+
+    [Fact]
+    public void CancelProject_Refunds_Only_External_Project_Spending()
+    {
+        var world = new WorldState();
+        var govt = new GovernmentSystem();
+        world.Businesses.Add(new Business("Builder", "factory", 5) { Id = 1, Cash = 100f });
+        var project = new GovernmentProject("Park", 1000f, 5, benefit: 0f);
+
+        govt.StartProject(world, project);
+        var refund = govt.CancelProject(world, project.Id);
+
+        Assert.Equal(200f, refund);
+        Assert.Equal(600f, project.LocalCostPaid);
+        Assert.Equal(400f, project.ExternalCostPaid);
+        Assert.Equal(200f, world.LastProjectRefunds);
+        Assert.Equal(200f, world.LastExternalInflow);
+        Assert.Equal(400f, world.LastExternalOutflow);
+        Assert.Equal(-800f, world.LastNetBudgetChange);
     }
 }

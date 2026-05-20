@@ -12,7 +12,27 @@
   "districts": [
     {
       "id": 1,
-      "name": "Central"
+      "name": "Central",
+      "housingSatisfaction": 72,
+      "safetySatisfaction": 68,
+      "healthcareSatisfaction": 70,
+      "entertainmentSatisfaction": 45
+    },
+    {
+      "id": 2,
+      "name": "North Residential",
+      "housingSatisfaction": 42,
+      "safetySatisfaction": 64,
+      "healthcareSatisfaction": 48,
+      "entertainmentSatisfaction": 58
+    },
+    {
+      "id": 3,
+      "name": "South Works",
+      "housingSatisfaction": 64,
+      "safetySatisfaction": 38,
+      "healthcareSatisfaction": 62,
+      "entertainmentSatisfaction": 52
     }
   ],
   "businesses": [
@@ -27,6 +47,7 @@
       "baseOutput": 2500,
       "unitPrice": 2,
       "demandMultiplier": 0.85,
+      "cash": 50000,
       "revenue": 5000,
       "expenses": 0
     },
@@ -41,20 +62,22 @@
       "baseOutput": 300,
       "unitPrice": 5,
       "demandMultiplier": 0.9,
+      "cash": 50000,
       "revenue": 3500,
       "expenses": 0
     },
     {
       "id": 3,
-      "name": "Central Workshop",
+      "name": "South Workshop",
       "type": "workshop",
-      "maxEmployees": 12,
-      "districtId": 1,
+      "maxEmployees": 14,
+      "districtId": 3,
       "wagePerEmployee": 36,
       "productionType": "goods",
       "baseOutput": 650,
       "unitPrice": 4,
       "demandMultiplier": 0.8,
+      "cash": 50000,
       "revenue": 4200,
       "expenses": 0
     },
@@ -69,7 +92,38 @@
       "baseOutput": 220,
       "unitPrice": 7,
       "demandMultiplier": 0.75,
+      "cash": 50000,
       "revenue": 3600,
+      "expenses": 0
+    },
+    {
+      "id": 5,
+      "name": "North Market",
+      "type": "shop",
+      "maxEmployees": 10,
+      "districtId": 2,
+      "wagePerEmployee": 34,
+      "productionType": "trade",
+      "baseOutput": 220,
+      "unitPrice": 5,
+      "demandMultiplier": 0.7,
+      "cash": 50000,
+      "revenue": 2600,
+      "expenses": 0
+    },
+    {
+      "id": 6,
+      "name": "South Depot",
+      "type": "factory",
+      "maxEmployees": 12,
+      "districtId": 3,
+      "wagePerEmployee": 37,
+      "productionType": "goods",
+      "baseOutput": 520,
+      "unitPrice": 4,
+      "demandMultiplier": 0.65,
+      "cash": 50000,
+      "revenue": 3000,
       "expenses": 0
     }
   ],
@@ -91,6 +145,24 @@
       "districtId": 1,
       "capacity": 3,
       "rentPerTick": 30
+    },
+    {
+      "id": 4,
+      "districtId": 2,
+      "capacity": 4,
+      "rentPerTick": 18
+    },
+    {
+      "id": 5,
+      "districtId": 2,
+      "capacity": 3,
+      "rentPerTick": 20
+    },
+    {
+      "id": 6,
+      "districtId": 3,
+      "capacity": 3,
+      "rentPerTick": 16
     }
   ],
   "citizens": [
@@ -122,8 +194,24 @@
       "age": 35,
       "profession": "Trader",
       "gender": "Female",
-      "districtId": 1,
-      "job": "Central Shop"
+      "districtId": 2,
+      "job": "North Market"
+    },
+    {
+      "name": "Dmitry Forge",
+      "age": 42,
+      "profession": "Worker",
+      "gender": "Male",
+      "districtId": 3,
+      "job": "South Workshop"
+    },
+    {
+      "name": "Elena Forge",
+      "age": 39,
+      "profession": "Worker",
+      "gender": "Female",
+      "districtId": 3,
+      "job": "South Depot"
     }
   ],
   "households": [
@@ -139,12 +227,22 @@
       ]
     },
     {
-      "districtId": 1,
-      "housingUnitId": 2,
-      "housingCapacity": 2,
-      "rentPerTick": 25,
+      "districtId": 2,
+      "housingUnitId": 4,
+      "housingCapacity": 4,
+      "rentPerTick": 18,
       "memberNames": [
         "Anna Green"
+      ]
+    },
+    {
+      "districtId": 3,
+      "housingUnitId": 6,
+      "housingCapacity": 3,
+      "rentPerTick": 16,
+      "memberNames": [
+        "Dmitry Forge",
+        "Elena Forge"
       ]
     }
   ],
@@ -155,6 +253,22 @@
       "type": "Park",
       "districtId": 1,
       "remainingTicks": 25,
+      "startTick": -1
+    },
+    {
+      "id": 2,
+      "name": "North Housing Block",
+      "type": "Housing",
+      "districtId": 2,
+      "remainingTicks": 35,
+      "startTick": -1
+    },
+    {
+      "id": 3,
+      "name": "South Safety Office",
+      "type": "Police",
+      "districtId": 3,
+      "remainingTicks": 30,
       "startTick": -1
     }
   ]

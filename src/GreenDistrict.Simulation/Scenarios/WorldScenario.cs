@@ -30,6 +30,12 @@ public class DistrictScenario
 {
     public int Id { get; set; }
     public string Name { get; set; } = string.Empty;
+    public float? SupportRating { get; set; }
+    public float? FoodSatisfaction { get; set; }
+    public float? HousingSatisfaction { get; set; }
+    public float? SafetySatisfaction { get; set; }
+    public float? HealthcareSatisfaction { get; set; }
+    public float? EntertainmentSatisfaction { get; set; }
 }
 
 public class BusinessScenario

@@ -19,6 +19,8 @@ public class EconomySystem
     private const float NeedTarget = 88f;
     private const float ExternalDemandShare = 0.45f;
     private const float InvestmentProfitShare = 0.18f;
+    private const float LocalGovernmentOperatingShare = 0.65f;
+    private const float ImportPriceMultiplier = 1.35f;
 
     private readonly float _taxRate;
 
@@ -161,6 +163,8 @@ public class EconomySystem
         world.LastNetBudgetChange = 0f;
         world.LastGrossWagesPaid = 0f;
         world.LastNetWagesPaid = 0f;
+        world.LastLocalGovernmentSpending = 0f;
+        world.LastExternalGovernmentSpending = 0f;
         world.LastExternalInflow = 0f;
         world.LastExternalOutflow = 0f;
         world.LastInternalTransfers = 0f;
@@ -276,6 +280,11 @@ public class EconomySystem
 
     public float ProcessConsumerPurchases(WorldState world)
     {
+        return ProcessConsumerPurchases(world, accessibility: null);
+    }
+
+    public float ProcessConsumerPurchases(WorldState world, MapAccessibilityReport? accessibility)
+    {
         if (world == null) throw new ArgumentNullException(nameof(world));
 
         var totalSpending = 0f;
@@ -288,6 +297,7 @@ public class EconomySystem
                 citizen.FoodSatisfaction,
                 value => citizen.FoodSatisfaction = ClampSatisfaction(value),
                 spend => spend * 1.4f,
+                accessibility,
                 "food",
                 "farm",
                 "shop",
@@ -300,6 +310,7 @@ public class EconomySystem
                 citizen.EntertainmentSatisfaction,
                 value => citizen.EntertainmentSatisfaction = ClampSatisfaction(value),
                 spend => spend * 0.8f,
+                accessibility,
                 "goods",
                 "workshop",
                 "shop",
@@ -312,6 +323,7 @@ public class EconomySystem
                 citizen.HealthcareSatisfaction,
                 value => citizen.HealthcareSatisfaction = ClampSatisfaction(value),
                 spend => spend * 0.9f,
+                accessibility,
                 "healthcare",
                 "clinic",
                 "services");
@@ -320,7 +332,6 @@ public class EconomySystem
         }
 
         world.LastConsumerSpending = totalSpending;
-        world.LastInternalTransfers += totalSpending;
         return totalSpending;
     }
 
@@ -334,6 +345,11 @@ public class EconomySystem
             EstimateConsumerDemand(world, districtId, "goods", GoodsMaintenanceSpend, "goods", "workshop", "shop", "trade"),
             EstimateConsumerDemand(world, districtId, "healthcare", HealthcareMaintenanceSpend, "healthcare", "clinic", "services")
         };
+    }
+
+    public EconomyDiagnosis Diagnose(WorldState world, int? districtId = null)
+    {
+        return EconomyDiagnosis.Analyze(world, districtId);
     }
 
     private static ConsumerDemandSnapshot EstimateConsumerDemand(
@@ -377,13 +393,17 @@ public class EconomySystem
         float currentNeed,
         Action<float> setNeed,
         Func<float, float> satisfactionGain,
+        MapAccessibilityReport? accessibility,
         params string[] providerTerms)
     {
         var desiredSpend = CalculateDesiredNeedSpend(currentNeed, maintenanceSpend);
         if (desiredSpend <= 0f || citizen.Cash <= 0f) return 0f;
 
-        var provider = FindConsumerProvider(world, citizen.DistrictId, providerTerms);
-        if (provider == null) return 0f;
+        var provider = FindConsumerProvider(world, citizen.DistrictId, accessibility, providerTerms);
+        if (provider == null)
+        {
+            return PurchaseImportedNeed(world, citizen, desiredSpend, currentNeed, setNeed, satisfactionGain);
+        }
 
         var unitPrice = Math.Max(0.01f, provider.UnitPrice);
         var remainingUnits = Math.Max(0f, provider.LastProducedUnits - provider.LastSoldUnits);
@@ -399,8 +419,29 @@ public class EconomySystem
         provider.LastSalesRevenue += spend;
         provider.LastLocalSalesRevenue += spend;
         provider.RecordRevenue(spend);
+        world.LastInternalTransfers += spend;
         setNeed(currentNeed + satisfactionGain(spend));
         return spend;
+    }
+
+    private static float PurchaseImportedNeed(
+        WorldState world,
+        Citizen citizen,
+        float desiredLocalValue,
+        float currentNeed,
+        Action<float> setNeed,
+        Func<float, float> satisfactionGain)
+    {
+        if (desiredLocalValue <= 0f || citizen.Cash <= 0f) return 0f;
+
+        var importSpend = Math.Min(citizen.Cash, desiredLocalValue * ImportPriceMultiplier);
+        if (importSpend <= 0f) return 0f;
+
+        citizen.Cash -= importSpend;
+        world.LastExternalOutflow += importSpend;
+        var effectiveLocalValue = importSpend / ImportPriceMultiplier;
+        setNeed(currentNeed + satisfactionGain(effectiveLocalValue));
+        return importSpend;
     }
 
     private static float CalculateDesiredNeedSpend(Citizen citizen, string category, float maintenanceSpend)
@@ -422,11 +463,16 @@ public class EconomySystem
         return maintenanceSpend + needGap * 0.035f;
     }
 
-    private static Business? FindConsumerProvider(WorldState world, int? districtId, params string[] terms)
+    private static Business? FindConsumerProvider(
+        WorldState world,
+        int? districtId,
+        MapAccessibilityReport? accessibility,
+        params string[] terms)
     {
         return world.Businesses
             .Where(business => business.Status == BusinessStatus.Active)
             .Where(business => MatchesAny(business, terms))
+            .Where(business => accessibility?.IsBusinessAccessible(business.Id) ?? true)
             .Where(HasRemainingConsumerSupply)
             .OrderByDescending(business => business.DistrictId == districtId)
             .ThenByDescending(business => business.GetQualityDemandMultiplier())
@@ -466,9 +512,47 @@ public class EconomySystem
 
         world.Budget -= expenses;
         world.LastOperatingExpenses = expenses;
-        world.LastExternalOutflow += expenses;
+        var localSpending = PayLocalGovernmentSuppliers(world, expenses * LocalGovernmentOperatingShare);
+        var externalSpending = expenses - localSpending;
+        world.LastLocalGovernmentSpending += localSpending;
+        world.LastExternalGovernmentSpending += externalSpending;
+        world.LastInternalTransfers += localSpending;
+        world.LastExternalOutflow += externalSpending;
         world.LastNetBudgetChange += world.Budget - budgetBefore;
         return expenses;
+    }
+
+    public static float PayLocalGovernmentSuppliers(WorldState world, float amount, int? districtId = null)
+    {
+        if (world == null) throw new ArgumentNullException(nameof(world));
+        amount = Math.Max(0f, amount);
+        if (amount <= 0f) return 0f;
+
+        var suppliers = world.Businesses
+            .Where(business => business.Status == BusinessStatus.Active)
+            .Where(business => !districtId.HasValue || business.DistrictId == districtId.Value)
+            .OrderByDescending(business => business.GetQualityDemandMultiplier())
+            .ThenBy(business => business.Id)
+            .ToList();
+
+        if (suppliers.Count == 0 && districtId.HasValue)
+        {
+            suppliers = world.Businesses
+                .Where(business => business.Status == BusinessStatus.Active)
+                .OrderByDescending(business => business.GetQualityDemandMultiplier())
+                .ThenBy(business => business.Id)
+                .ToList();
+        }
+
+        if (suppliers.Count == 0) return 0f;
+
+        var perSupplier = amount / suppliers.Count;
+        foreach (var supplier in suppliers)
+        {
+            supplier.RecordRevenue(perSupplier);
+        }
+
+        return amount;
     }
 
     public static float GetGrossWage(Citizen citizen, Business business, ProfessionCatalog? professionCatalog = null)
@@ -562,6 +646,11 @@ public class EconomySystem
             }
         }
 
+        if (closed > 0)
+        {
+            world.RefreshMapAccessibility();
+        }
+
         return closed;
     }
 
@@ -633,6 +722,11 @@ public class EconomySystem
         };
 
         world.Businesses.Add(business);
+        if (business.Cash > 0f)
+        {
+            world.LastExternalInflow += business.Cash;
+        }
+
         world.Events.Add(new GameEvent(
             $"Business opened: {business.Name}",
             $"Business {business.Name} opened to cover {definition.ProductionType} demand.",
@@ -640,6 +734,7 @@ public class EconomySystem
         {
             CreatedAtTick = world.Clock.CurrentTick
         });
+        world.RefreshMapAccessibility();
         return business;
     }
 

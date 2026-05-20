@@ -229,4 +229,30 @@ public class DemographyTests
 
         Assert.Equal(2, citizen.DistrictId);
     }
+
+    [Fact]
+    public void ExternalMigration_Adds_Citizen_With_Savings_When_Jobs_And_Housing_Are_Available()
+    {
+        var world = new WorldState();
+        world.Districts.Add(new District("Opportunity") { Id = 1, AverageSafetySatisfaction = 70f });
+        world.AddHousingUnit(1, 1, 1, 15f);
+        world.Businesses.Add(new Business("Workshop", "workshop", 2) { DistrictId = 1 });
+
+        var dem = new DemographySystem(
+            ticksPerYear: 1,
+            birthRatePerPersonPerYear: 0f,
+            baseDeathRatePerPersonPerYear: 0f,
+            migrationRatePerPersonPerYear: 1f,
+            rng: new Random(1));
+
+        dem.UpdateTick(world);
+
+        var migrant = Assert.Single(world.Citizens);
+        Assert.Equal(1, migrant.DistrictId);
+        Assert.True(migrant.Cash > 0f);
+        Assert.Equal(migrant.Cash, world.LastExternalInflow, precision: 3);
+        Assert.Contains(world.Events, gameEvent => gameEvent.Title.StartsWith("Migration:", StringComparison.Ordinal));
+        Assert.True(migrant.HouseholdId.HasValue);
+        Assert.True(world.HousingUnits[0].IsOccupied);
+    }
 }

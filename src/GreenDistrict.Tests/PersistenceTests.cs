@@ -75,6 +75,8 @@ public class PersistenceTests
         world.LastExternalInflow = 123f;
         world.LastExternalOutflow = project.Cost;
         world.LastInternalTransfers = 456f;
+        world.LastLocalGovernmentSpending = 111f;
+        world.LastExternalGovernmentSpending = 222f;
 
         var gameEvent = new GameEvent("Crisis", "Choose response.", EventType.Decision);
         gameEvent.Choices.Add(new EventChoice("fund", "Fund response") { BudgetEffect = -100f, DistrictId = 7 });
@@ -109,10 +111,10 @@ public class PersistenceTests
         Assert.Contains(loadedCitizen.Id, loadedHousehold.MemberIds);
         Assert.Equal(loadedHousehold.Id, loadedHousing.HouseholdId);
         Assert.Contains(loadedCitizen.Id, loadedBusiness.EmployeeIds);
-        Assert.Equal(700f, loadedBusiness.Cash);
-        Assert.Equal(120f, loadedBusiness.RevenueThisTick);
+        Assert.Equal(700f + project.LocalCostPaid, loadedBusiness.Cash);
+        Assert.Equal(120f + project.LocalCostPaid, loadedBusiness.RevenueThisTick);
         Assert.Equal(40f, loadedBusiness.ExpensesThisTick);
-        Assert.Equal(1500f, loadedBusiness.TotalRevenue);
+        Assert.Equal(1500f + project.LocalCostPaid, loadedBusiness.TotalRevenue);
         Assert.Equal(500f, loadedBusiness.TotalExpenses);
         Assert.Equal(15f, loadedBusiness.LastLocalSalesRevenue);
         Assert.Equal(25f, loadedBusiness.LastExternalSalesRevenue);
@@ -124,8 +126,12 @@ public class PersistenceTests
         Assert.Equal(123f, loaded.LastExternalInflow);
         Assert.Equal(project.Cost, loaded.LastExternalOutflow);
         Assert.Equal(456f, loaded.LastInternalTransfers);
+        Assert.Equal(111f, loaded.LastLocalGovernmentSpending);
+        Assert.Equal(222f, loaded.LastExternalGovernmentSpending);
         Assert.Equal(ProjectType.Clinic, loadedProject.Type);
         Assert.Equal(7, loadedProject.DistrictId);
+        Assert.Equal(project.LocalCostPaid, loadedProject.LocalCostPaid);
+        Assert.Equal(project.ExternalCostPaid, loadedProject.ExternalCostPaid);
         Assert.False(loadedProject.Completed);
         Assert.True(loadedEvent.HasChoices);
         Assert.Equal("fund", loadedEvent.Choices[0].Id);

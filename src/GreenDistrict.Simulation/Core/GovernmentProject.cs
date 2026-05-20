@@ -22,6 +22,8 @@ public class GovernmentProject
     public int HousingUnitsToCreate { get; set; }
     public int HousingUnitCapacity { get; set; }
     public float HousingUnitRentPerTick { get; set; }
+    public float LocalCostPaid { get; set; }
+    public float ExternalCostPaid { get; set; }
     public bool Completed { get; set; }
     public long StartTick { get; set; }
 

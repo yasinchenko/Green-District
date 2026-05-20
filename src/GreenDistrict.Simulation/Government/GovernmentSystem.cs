@@ -1,6 +1,7 @@
 using System;
 using System.Linq;
 using GreenDistrict.Simulation.Core;
+using GreenDistrict.Simulation.Economy;
 
 namespace GreenDistrict.Simulation.Government;
 
@@ -9,6 +10,8 @@ namespace GreenDistrict.Simulation.Government;
 /// </summary>
 public class GovernmentSystem
 {
+    private const float LocalProjectSpendingShare = 0.6f;
+
     /// <summary>
     /// Start a project if there is enough budget. Deducts cost immediately.
     /// </summary>
@@ -20,13 +23,24 @@ public class GovernmentSystem
         if (world.Budget < project.Cost) return false;
 
         world.Budget -= project.Cost;
+        var localSpending = EconomySystem.PayLocalGovernmentSuppliers(
+            world,
+            project.Cost * LocalProjectSpendingShare,
+            project.DistrictId);
+        var externalSpending = project.Cost - localSpending;
+        project.LocalCostPaid = localSpending;
+        project.ExternalCostPaid = externalSpending;
         world.LastProjectSpending += project.Cost;
-        world.LastExternalOutflow += project.Cost;
+        world.LastLocalGovernmentSpending += localSpending;
+        world.LastExternalGovernmentSpending += externalSpending;
+        world.LastInternalTransfers += localSpending;
+        world.LastExternalOutflow += externalSpending;
         world.LastNetBudgetChange -= project.Cost;
         project.StartTick = world.Clock.CurrentTick;
         project.RemainingTicks = project.DurationTicks;
         project.Completed = false;
         world.Projects.Add(project);
+        world.RefreshMapAccessibility();
         return true;
     }
 
@@ -49,6 +63,7 @@ public class GovernmentSystem
                 world.LastNetBudgetChange += project.Benefit;
                 ApplyProjectEffects(world, project);
                 world.DistrictsSystem.UpdateDistrictAggregates(world);
+                world.RefreshMapAccessibility();
 
                 var ev = new GameEvent($"Project {project.Name} completed", $"Project {project.Name} completed and delivered benefit {project.Benefit}", EventType.Economic)
                 {
@@ -68,12 +83,14 @@ public class GovernmentSystem
         var project = world.Projects.FirstOrDefault(p => p.Id == projectId && !p.Completed);
         if (project == null) return 0f;
 
-        var refund = project.Cost * 0.5f;
+        var refundableBase = project.ExternalCostPaid > 0f ? project.ExternalCostPaid : project.Cost;
+        var refund = refundableBase * 0.5f;
         world.Budget += refund;
         world.LastProjectRefunds += refund;
         world.LastExternalInflow += refund;
         world.LastNetBudgetChange += refund;
         world.Projects.Remove(project);
+        world.RefreshMapAccessibility();
 
         var ev = new GameEvent($"Project {project.Name} cancelled", $"Project {project.Name} was cancelled and refunded {refund}", EventType.Political)
         {

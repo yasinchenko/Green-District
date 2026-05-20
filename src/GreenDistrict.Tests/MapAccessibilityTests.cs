@@ -3,6 +3,7 @@ using GreenDistrict.Simulation.Core;
 using GreenDistrict.Simulation.Economy;
 using GreenDistrict.Simulation.Map;
 using GreenDistrict.Simulation.Needs;
+using GreenDistrict.Simulation.Scenarios;
 using Xunit;
 
 namespace GreenDistrict.Tests;
@@ -77,6 +78,63 @@ public class MapAccessibilityTests
         Assert.Equal(0f, business.LastProducedUnits);
         Assert.Equal(0f, business.LastSoldUnits);
         Assert.Equal(0f, business.LastSalesRevenue);
+    }
+
+    [Fact]
+    public void WorldState_Initialize_Builds_Map_Accessibility_Report()
+    {
+        var world = new WorldState();
+
+        world.Initialize(WorldScenarioLoader.CreateDefault());
+
+        Assert.NotNull(world.MapAccessibility);
+        Assert.NotEmpty(world.MapAccessibility!.Districts);
+        Assert.All(world.Businesses, business => Assert.True(world.MapAccessibility.IsBusinessAccessible(business.Id)));
+    }
+
+    [Fact]
+    public void Economy_Consumer_Purchases_Skip_Inaccessible_Local_Providers()
+    {
+        var world = new WorldState();
+        var citizen = new Citizen("Resident", 30, "Worker", Gender.Female)
+        {
+            DistrictId = 1,
+            Cash = 100f,
+            FoodSatisfaction = 50f
+        };
+        var business = new Business("Local Farm", "farm", 0)
+        {
+            Id = 20,
+            DistrictId = 1,
+            ProductionType = "food",
+            BaseOutput = 100f,
+            UnitPrice = 2f,
+            Cash = 0f,
+            Status = BusinessStatus.Active,
+            LastProducedUnits = 100f
+        };
+        world.Citizens.Add(citizen);
+        world.Businesses.Add(business);
+        var report = new MapAccessibilityReport(
+            new Dictionary<(MapObjectEntityKind Kind, int Id), MapEntityAccessibility>
+            {
+                [(MapObjectEntityKind.Business, 20)] = new(
+                    MapObjectEntityKind.Business,
+                    20,
+                    "business:20",
+                    1,
+                    HasRoadAccess: false,
+                    CoveragePercent: 0f)
+            },
+            new Dictionary<int, MapDistrictAccessibility>());
+
+        var spending = new EconomySystem().ProcessConsumerPurchases(world, report);
+
+        Assert.True(spending > 0f);
+        Assert.Equal(0f, business.LastLocalSalesRevenue);
+        Assert.Equal(0f, business.Cash);
+        Assert.True(world.LastExternalOutflow > 0f);
+        Assert.True(citizen.Cash < 100f);
     }
 
     [Fact]

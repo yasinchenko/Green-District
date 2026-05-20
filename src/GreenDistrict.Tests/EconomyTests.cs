@@ -298,11 +298,12 @@ public class EconomyTests
         Assert.True(spending > 0f);
         Assert.Equal(spending, world.LastConsumerSpending);
         Assert.Equal(10f - spending, citizen.Cash, precision: 3);
-        Assert.Equal(100f + spending, farm.Cash, precision: 3);
-        Assert.Equal(spending, farm.RevenueThisTick, precision: 3);
-        Assert.Equal(spending, farm.LastLocalSalesRevenue, precision: 3);
+        Assert.Equal(100f + farm.LastLocalSalesRevenue, farm.Cash, precision: 3);
+        Assert.Equal(farm.LastLocalSalesRevenue, farm.RevenueThisTick, precision: 3);
+        Assert.True(farm.LastLocalSalesRevenue > 0f);
         Assert.Equal(0f, world.LastSalesRevenueGenerated);
-        Assert.Equal(spending, world.LastInternalTransfers, precision: 3);
+        Assert.Equal(farm.LastLocalSalesRevenue, world.LastInternalTransfers, precision: 3);
+        Assert.Equal(spending - farm.LastLocalSalesRevenue, world.LastExternalOutflow, precision: 3);
         Assert.True(citizen.FoodSatisfaction > 50f);
     }
 
@@ -347,6 +348,32 @@ public class EconomyTests
     }
 
     [Fact]
+    public void ProcessConsumerPurchases_Uses_External_Import_When_No_Provider_Is_Available()
+    {
+        var world = new WorldState();
+        var citizen = new Citizen("Buyer", 30, "Worker")
+        {
+            DistrictId = 1,
+            Cash = 10f,
+            FoodSatisfaction = 50f,
+            HousingSatisfaction = 80f,
+            SafetySatisfaction = 80f,
+            HealthcareSatisfaction = 100f,
+            EntertainmentSatisfaction = 100f
+        };
+        world.Citizens.Add(citizen);
+
+        var spending = new EconomySystem().ProcessConsumerPurchases(world);
+
+        Assert.True(spending > 0f);
+        Assert.Equal(spending, world.LastConsumerSpending, precision: 3);
+        Assert.Equal(spending, world.LastExternalOutflow, precision: 3);
+        Assert.Equal(0f, world.LastInternalTransfers);
+        Assert.Equal(10f - spending, citizen.Cash, precision: 3);
+        Assert.True(citizen.FoodSatisfaction > 50f);
+    }
+
+    [Fact]
     public void EstimateConsumerDemand_Reports_Unmet_Demand_By_Category()
     {
         var world = new WorldState();
@@ -377,6 +404,112 @@ public class EconomyTests
         Assert.Equal(food.DesiredSpending, food.UnmetDemand);
         Assert.Equal(1.25f, food.AverageQuality);
         Assert.True(healthcare.UnmetDemand > 0f);
+    }
+
+    [Fact]
+    public void Diagnose_Reports_Growing_Economy_From_External_Inflow_And_Local_Spending()
+    {
+        var world = new WorldState
+        {
+            LastExternalInflow = 250f,
+            LastExternalOutflow = 40f,
+            LastConsumerSpending = 80f,
+            LastIncomeTaxCollected = 15f
+        };
+        var buyer = new Citizen("Buyer", 30, "Worker")
+        {
+            DistrictId = 1,
+            Job = "Farm",
+            Cash = 100f,
+            FoodSatisfaction = 90f,
+            HealthcareSatisfaction = 90f,
+            EntertainmentSatisfaction = 90f
+        };
+        var farm = new Business("Farm", "farm", 1)
+        {
+            DistrictId = 1,
+            Cash = 500f,
+            ProductionType = "food",
+            LastProducedUnits = 20f,
+            LastSoldUnits = 10f,
+            RevenueThisTick = 20f,
+            UnitPrice = 2f
+        };
+        world.Citizens.Add(buyer);
+        world.Businesses.Add(farm);
+        farm.EmployeeIds.Add(buyer.Id);
+
+        var diagnosis = world.Economy.Diagnose(world);
+
+        Assert.Equal(EconomyTrend.Growing, diagnosis.Trend);
+        Assert.Equal(EconomyDiagnosisReason.ExternalInflow, diagnosis.PrimaryReason);
+        Assert.True(diagnosis.NetExternalFlow > 0f);
+        Assert.Contains(diagnosis.Factors, factor => factor.Reason == EconomyDiagnosisReason.LocalSpending);
+    }
+
+    [Fact]
+    public void Diagnose_Reports_Shrinking_Economy_From_Leakage_And_Business_Risk()
+    {
+        var world = new WorldState
+        {
+            LastExternalInflow = 10f,
+            LastExternalOutflow = 200f,
+            LastConsumerSpending = 20f,
+            LastNetBudgetChange = -50f
+        };
+        world.Businesses.Add(new Business("Weak Shop", "shop", 2)
+        {
+            Cash = 0f,
+            WagePerEmployee = 30f,
+            ConsecutiveLossTicks = 1,
+            LastProducedUnits = 10f,
+            LastSoldUnits = 0f
+        });
+
+        var diagnosis = world.Economy.Diagnose(world);
+
+        Assert.Equal(EconomyTrend.Shrinking, diagnosis.Trend);
+        Assert.Equal(EconomyDiagnosisReason.ImportLeakage, diagnosis.PrimaryReason);
+        Assert.Equal(1, diagnosis.AtRiskBusinesses);
+        Assert.Contains(diagnosis.Factors, factor => factor.Reason == EconomyDiagnosisReason.ImportLeakage);
+    }
+
+    [Fact]
+    public void Diagnose_Can_Focus_On_District_Unmet_Demand()
+    {
+        var world = new WorldState();
+        for (var i = 0; i < 4; i++)
+        {
+            world.Citizens.Add(new Citizen($"Hungry North {i}", 30, "Worker")
+            {
+                DistrictId = 2,
+                Cash = 30f,
+                FoodSatisfaction = 10f,
+                HealthcareSatisfaction = 90f,
+                EntertainmentSatisfaction = 90f
+            });
+        }
+        world.Citizens.Add(new Citizen("Fed Central", 30, "Worker")
+        {
+            DistrictId = 1,
+            Cash = 30f,
+            FoodSatisfaction = 95f,
+            HealthcareSatisfaction = 90f,
+            EntertainmentSatisfaction = 90f
+        });
+        world.Businesses.Add(new Business("Central Farm", "farm", 1)
+        {
+            DistrictId = 1,
+            ProductionType = "food",
+            LastProducedUnits = 100f,
+            UnitPrice = 2f,
+            Cash = 100f
+        });
+
+        var diagnosis = world.Economy.Diagnose(world, districtId: 2);
+
+        Assert.True(diagnosis.UnmetDemand > 10f);
+        Assert.Contains(diagnosis.Factors, factor => factor.Reason == EconomyDiagnosisReason.UnmetDemand);
     }
 
     [Fact]
@@ -507,6 +640,51 @@ public class EconomyTests
     }
 
     [Fact]
+    public void UpdateBusinessViability_Does_Not_Close_When_Cash_Covers_Old_Cumulative_Loss()
+    {
+        var world = new WorldState();
+        var business = new Business("Buffered Shop", "shop", 2)
+        {
+            Cash = 1000f,
+            Revenue = 100f,
+            Expenses = 500f
+        };
+        world.Businesses.Add(business);
+
+        var closed = new EconomySystem().UpdateBusinessViability(world, lossTicksToBankruptcy: 1);
+
+        Assert.Equal(0, closed);
+        Assert.Equal(BusinessStatus.Active, business.Status);
+        Assert.Equal(0, business.ConsecutiveLossTicks);
+    }
+
+    [Fact]
+    public void UpdateBusinessViability_Closes_When_Debt_Pressure_Exceeds_Payroll_Reserve()
+    {
+        var world = new WorldState();
+        var business = new Business("Debt Shop", "shop", 2)
+        {
+            Cash = -600f,
+            RevenueThisTick = 100f,
+            ExpensesThisTick = 0f,
+            WagePerEmployee = 500f
+        };
+        var worker = new Citizen("Worker", 30, "Worker") { Job = business.Name };
+        world.Businesses.Add(business);
+        world.Citizens.Add(worker);
+        business.EmployeeIds.Add(worker.Id);
+        business.EmployeeCount = 1;
+
+        var closed = new EconomySystem().UpdateBusinessViability(world, lossTicksToBankruptcy: 1);
+
+        Assert.Equal(1, closed);
+        Assert.Equal(BusinessStatus.Bankrupt, business.Status);
+        Assert.Null(worker.Job);
+        Assert.Empty(business.EmployeeIds);
+        Assert.Contains(world.Events, gameEvent => gameEvent.Description.Contains("cashflow", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void TryOpenBusiness_Creates_Business_When_Economy_Allows()
     {
         var world = new WorldState { Budget = 20000f };
@@ -607,6 +785,7 @@ public class EconomyTests
         Assert.Equal("clinic", created.Type);
         Assert.Equal(1, created.DistrictId);
         Assert.Equal(1234f, created.Cash);
+        Assert.Equal(1234f, world.LastExternalInflow);
         Assert.Contains(world.Events, gameEvent => gameEvent.Title == $"Business opened: {created.Name}");
     }
 
@@ -743,8 +922,33 @@ public class EconomyTests
         Assert.Equal(35f, expenses);
         Assert.Equal(35f, world.LastOperatingExpenses);
         Assert.Equal(35f, world.LastExternalOutflow);
+        Assert.Equal(35f, world.LastExternalGovernmentSpending);
+        Assert.Equal(0f, world.LastLocalGovernmentSpending);
         Assert.Equal(-35f, world.LastNetBudgetChange);
         Assert.Equal(965f, world.Budget);
+    }
+
+    [Fact]
+    public void ProcessGovernmentExpenses_Pays_Local_Suppliers_When_Available()
+    {
+        var world = new WorldState
+        {
+            Budget = 1000f,
+            BaseOperatingExpensePerTick = 100f
+        };
+        var supplier = new Business("Local Supplier", "shop", 2) { Id = 1, Cash = 50f };
+        world.Businesses.Add(supplier);
+
+        var expenses = new EconomySystem().ProcessGovernmentExpenses(world);
+
+        Assert.Equal(100f, expenses);
+        Assert.Equal(65f, supplier.Revenue);
+        Assert.Equal(115f, supplier.Cash);
+        Assert.Equal(65f, world.LastLocalGovernmentSpending);
+        Assert.Equal(35f, world.LastExternalGovernmentSpending);
+        Assert.Equal(65f, world.LastInternalTransfers);
+        Assert.Equal(35f, world.LastExternalOutflow);
+        Assert.Equal(900f, world.Budget);
     }
 
     [Fact]

@@ -14,6 +14,7 @@ using GreenDistrict.Simulation.World;
 using GreenDistrict.Simulation.Demography;
 using GreenDistrict.Simulation.Behavior;
 using GreenDistrict.Simulation.Scenarios;
+using GreenDistrict.Simulation.Map;
 
     public class WorldState
 {
@@ -25,6 +26,13 @@ using GreenDistrict.Simulation.Scenarios;
     private DistrictSystem _districtSystem;
     private DemographySystem _demographySystem;
     private BehaviorSystem _behaviorSystem;
+    private MapGridGenerator _mapGridGenerator;
+    private MapAccessibilityAnalyzer _mapAccessibilityAnalyzer;
+    private MapAccessibilityReport? _mapAccessibility;
+    private const float CrisisAidGrant = 1000f;
+    private const int CrisisEventCooldownTicks = 1440 * 14;
+    private const int WorldEventIntervalTicks = 1440 * 21;
+    private long _lastWorldEventTick = -WorldEventIntervalTicks;
     
     // Core collections
     public List<Citizen> Citizens { get; } = new();
@@ -59,6 +67,7 @@ using GreenDistrict.Simulation.Scenarios;
     public DistrictSystem DistrictsSystem => _districtSystem;
     public DemographySystem Demography => _demographySystem;
     public BehaviorSystem Behavior => _behaviorSystem;
+    public MapAccessibilityReport? MapAccessibility => _mapAccessibility;
     // Last computed metrics
     public float LastUnemploymentRate { get; private set; }
     public float LastIncomeTaxCollected { get; set; }
@@ -71,6 +80,8 @@ using GreenDistrict.Simulation.Scenarios;
     public float LastProjectSpending { get; set; }
     public float LastProjectBenefits { get; set; }
     public float LastProjectRefunds { get; set; }
+    public float LastLocalGovernmentSpending { get; set; }
+    public float LastExternalGovernmentSpending { get; set; }
     public float LastConsumerSpending { get; set; }
     public float LastExternalInflow { get; set; }
     public float LastExternalOutflow { get; set; }
@@ -88,9 +99,11 @@ using GreenDistrict.Simulation.Scenarios;
         _economySystem = new EconomySystem();
         _needsSystem = new NeedsSystem();
         _districtSystem = new DistrictSystem();
+        _mapGridGenerator = new MapGridGenerator();
+        _mapAccessibilityAnalyzer = new MapAccessibilityAnalyzer();
 
         // Register needs update to CitizenNeedsUpdate phase
-        _updateManager.Register(UpdatePhase.CitizenNeedsUpdate, () => _needsSystem.UpdateTick(this));
+        _updateManager.Register(UpdatePhase.CitizenNeedsUpdate, () => _needsSystem.UpdateTick(this, _mapAccessibility));
 
         // Instantiate behavior system and register before economy assign
         _behaviorSystem = new BehaviorSystem();
@@ -102,13 +115,13 @@ using GreenDistrict.Simulation.Scenarios;
             if (!ShouldRunEconomicTick()) return;
 
             _economySystem.AssignJobs(this);
-            _economySystem.ProcessProduction(this);
+            _economySystem.ProcessProduction(this, _mapAccessibility);
             _economySystem.ProcessPayroll(this);
-            _economySystem.ProcessConsumerPurchases(this);
+            _economySystem.ProcessConsumerPurchases(this, _mapAccessibility);
             _economySystem.ProcessExternalSales(this);
             _economySystem.ProcessBusinessTaxes(this);
             _economySystem.ProcessBusinessInvestments(this);
-            _economySystem.UpdateBusinessViability(this);
+            _economySystem.UpdateBusinessViability(this, accessibility: _mapAccessibility);
             _economySystem.ProcessGovernmentExpenses(this);
             RecalculateHouseholds();
         });
@@ -135,6 +148,7 @@ using GreenDistrict.Simulation.Scenarios;
         _updateManager.Register(UpdatePhase.CrisisProgression, UpdateCrises);
         _updateManager.Register(UpdatePhase.PoliticalSupportUpdate, UpdatePoliticalSupport);
         _updateManager.Register(UpdatePhase.ElectionCheck, CheckElection);
+        _updateManager.Register(UpdatePhase.NotificationGeneration, UpdateWorldEvents);
         _demographySystem = CreateDemographySystem();
         // Demography: run aging/births/deaths on TimeUpdate (annual within DemographySystem)
         _updateManager.Register(UpdatePhase.TimeUpdate, () => _demographySystem.UpdateTick(this));
@@ -183,7 +197,8 @@ using GreenDistrict.Simulation.Scenarios;
         {
             Districts.Add(new District(districtSeed.Name)
             {
-                Id = districtSeed.Id
+                Id = districtSeed.Id,
+                SupportRating = Math.Clamp(districtSeed.SupportRating ?? 75f, 0f, 100f)
             });
         }
 
@@ -268,6 +283,8 @@ using GreenDistrict.Simulation.Scenarios;
             EnsureInitialPopulation(scenario.InitialPopulation.Value);
         }
 
+        ApplyDistrictStartingConditions(scenario);
+
         foreach (var projectSeed in scenario.Projects)
         {
             Projects.Add(CreateProjectFromScenario(projectSeed));
@@ -276,6 +293,7 @@ using GreenDistrict.Simulation.Scenarios;
         ReconcileScenarioJobs();
         RecalculateHouseholds();
         _districtSystem.UpdateDistrictAggregates(this);
+        RefreshMapAccessibility();
         LastUnemploymentRate = _economySystem.GetUnemploymentRate(this);
     }
     
@@ -286,6 +304,19 @@ using GreenDistrict.Simulation.Scenarios;
     {
         _clock.Tick();
         _updateManager.ExecuteFullCycle();
+    }
+
+    public MapAccessibilityReport? RefreshMapAccessibility()
+    {
+        if (Districts.Count == 0)
+        {
+            _mapAccessibility = null;
+            return null;
+        }
+
+        var map = _mapGridGenerator.Generate(this);
+        _mapAccessibility = _mapAccessibilityAnalyzer.Analyze(this, map);
+        return _mapAccessibility;
     }
     
     /// <summary>
@@ -379,6 +410,7 @@ using GreenDistrict.Simulation.Scenarios;
         household.HousingUnitId = housingUnit.Id;
         household.HousingCapacity = housingUnit.Capacity;
         household.RentPerTick = housingUnit.RentPerTick;
+        household.RecalculateIncome(Citizens);
 
         if (housingUnit.DistrictId.HasValue)
         {
@@ -412,6 +444,7 @@ using GreenDistrict.Simulation.Scenarios;
         household.HousingUnitId = null;
         household.HousingCapacity = 0;
         household.RentPerTick = 0f;
+        household.RecalculateIncome(Citizens);
     }
 
     /// <summary>
@@ -532,6 +565,16 @@ using GreenDistrict.Simulation.Scenarios;
         if (Budget + choice.BudgetEffect < 0f) return false;
 
         Budget += choice.BudgetEffect;
+        LastNetBudgetChange += choice.BudgetEffect;
+        if (choice.BudgetEffect > 0f)
+        {
+            LastExternalInflow += choice.BudgetEffect;
+        }
+        else if (choice.BudgetEffect < 0f)
+        {
+            LastExternalOutflow += -choice.BudgetEffect;
+        }
+
         SupportRating = Math.Clamp(SupportRating + choice.SupportEffect, 0f, 100f);
         ApplyChoiceCitizenEffects(choice);
 
@@ -542,12 +585,14 @@ using GreenDistrict.Simulation.Scenarios;
             {
                 district.HasActiveCrisis = false;
                 district.CrisisRisk = 0f;
+                district.LastCrisisEventTick = Clock.CurrentTick;
             }
         }
 
         gameEvent.IsResolved = true;
         gameEvent.SelectedChoiceId = choice.Id;
         _districtSystem.UpdateDistrictAggregates(this);
+        RefreshMapAccessibility();
         return true;
     }
     
@@ -589,6 +634,8 @@ using GreenDistrict.Simulation.Scenarios;
         LastProjectSpending = 0f;
         LastProjectBenefits = 0f;
         LastProjectRefunds = 0f;
+        LastLocalGovernmentSpending = 0f;
+        LastExternalGovernmentSpending = 0f;
         LastConsumerSpending = 0f;
         LastExternalInflow = 0f;
         LastExternalOutflow = 0f;
@@ -596,6 +643,8 @@ using GreenDistrict.Simulation.Scenarios;
         LastElectionTick = -1;
         LastElectionSupport = 0f;
         ElectionCount = 0;
+        _mapAccessibility = null;
+        _lastWorldEventTick = -WorldEventIntervalTicks;
     }
 
     internal void RestoreRuntimeMetrics(
@@ -610,6 +659,8 @@ using GreenDistrict.Simulation.Scenarios;
         float lastProjectSpending,
         float lastProjectBenefits,
         float lastProjectRefunds,
+        float lastLocalGovernmentSpending,
+        float lastExternalGovernmentSpending,
         float lastConsumerSpending,
         float lastExternalInflow,
         float lastExternalOutflow,
@@ -629,6 +680,8 @@ using GreenDistrict.Simulation.Scenarios;
         LastProjectSpending = lastProjectSpending;
         LastProjectBenefits = lastProjectBenefits;
         LastProjectRefunds = lastProjectRefunds;
+        LastLocalGovernmentSpending = lastLocalGovernmentSpending;
+        LastExternalGovernmentSpending = lastExternalGovernmentSpending;
         LastConsumerSpending = lastConsumerSpending;
         LastExternalInflow = lastExternalInflow;
         LastExternalOutflow = lastExternalOutflow;
@@ -650,6 +703,8 @@ using GreenDistrict.Simulation.Scenarios;
         LastProjectSpending = 0f;
         LastProjectBenefits = 0f;
         LastProjectRefunds = 0f;
+        LastLocalGovernmentSpending = 0f;
+        LastExternalGovernmentSpending = 0f;
         LastConsumerSpending = 0f;
         LastExternalInflow = 0f;
         LastExternalOutflow = 0f;
@@ -744,16 +799,16 @@ using GreenDistrict.Simulation.Scenarios;
             var employmentPressure = Math.Max(0f, 45f - district.EmploymentRate);
             district.CrisisRisk = Math.Clamp(supportPressure + safetyPressure + servicePressure + employmentPressure, 0f, 100f);
 
-            if (!district.HasActiveCrisis && district.CrisisRisk >= 35f)
+            if (!district.HasActiveCrisis && district.CrisisRisk >= 35f && CanTriggerDistrictCrisis(district))
             {
                 district.HasActiveCrisis = true;
-                var crisisEvent = new GameEvent(
-                    $"Crisis in {district.Name}",
-                    $"{district.Name} is facing a political crisis.",
-                    EventType.Crisis)
-                {
-                    CreatedAtTick = Clock.CurrentTick
-                };
+                district.LastCrisisEventTick = Clock.CurrentTick;
+                var reason = DetermineCrisisReason(
+                    supportPressure,
+                    safetyPressure,
+                    servicePressure,
+                    employmentPressure);
+                var crisisEvent = CreateDistrictCrisisEvent(district, reason);
                 crisisEvent.Choices.Add(new EventChoice("fund-response", "Fund emergency response", "Spend budget to stabilize the district.")
                 {
                     DistrictId = district.Id,
@@ -770,6 +825,7 @@ using GreenDistrict.Simulation.Scenarios;
                     SafetySatisfactionEffect = 2f
                 });
                 Events.Add(crisisEvent);
+                ApplyExternalCrisisAid(district);
             }
             else if (district.HasActiveCrisis && district.CrisisRisk < 15f)
             {
@@ -789,6 +845,74 @@ using GreenDistrict.Simulation.Scenarios;
         {
             SupportRating = Math.Clamp(SupportRating - activeCrises * 0.05f, 0f, 100f);
         }
+    }
+
+    private bool CanTriggerDistrictCrisis(District district)
+    {
+        if (district.LastCrisisEventTick == long.MinValue) return true;
+        return Clock.CurrentTick - district.LastCrisisEventTick >= CrisisEventCooldownTicks;
+    }
+
+    private GameEvent CreateDistrictCrisisEvent(District district, CrisisReason reason)
+    {
+        return new GameEvent(
+            $"Crisis in {district.Name}: {CrisisReasonTitle(reason)}",
+            $"{district.Name} is facing a crisis driven by {CrisisReasonDescription(reason)}.",
+            EventType.Crisis)
+        {
+            CreatedAtTick = Clock.CurrentTick
+        };
+    }
+
+    private static CrisisReason DetermineCrisisReason(
+        float supportPressure,
+        float safetyPressure,
+        float servicePressure,
+        float employmentPressure)
+    {
+        var max = Math.Max(Math.Max(supportPressure, safetyPressure), Math.Max(servicePressure, employmentPressure));
+        if (Math.Abs(max - safetyPressure) < 0.001f) return CrisisReason.Safety;
+        if (Math.Abs(max - servicePressure) < 0.001f) return CrisisReason.Services;
+        if (Math.Abs(max - employmentPressure) < 0.001f) return CrisisReason.Employment;
+        return CrisisReason.Support;
+    }
+
+    private static string CrisisReasonTitle(CrisisReason reason)
+    {
+        return reason switch
+        {
+            CrisisReason.Safety => "safety",
+            CrisisReason.Services => "services",
+            CrisisReason.Employment => "jobs",
+            _ => "support"
+        };
+    }
+
+    private static string CrisisReasonDescription(CrisisReason reason)
+    {
+        return reason switch
+        {
+            CrisisReason.Safety => "low safety and public order concerns",
+            CrisisReason.Services => "weak public services",
+            CrisisReason.Employment => "employment pressure",
+            _ => "low public support"
+        };
+    }
+
+    private void ApplyExternalCrisisAid(District district)
+    {
+        if (Budget >= 0f) return;
+
+        Budget += CrisisAidGrant;
+        LastExternalInflow += CrisisAidGrant;
+        LastNetBudgetChange += CrisisAidGrant;
+        Events.Add(new GameEvent(
+            $"Crisis aid for {district.Name}",
+            $"{district.Name} received an external crisis grant of {CrisisAidGrant:F0}.",
+            EventType.Economic)
+        {
+            CreatedAtTick = Clock.CurrentTick
+        });
     }
 
     private void ApplyChoiceCitizenEffects(EventChoice choice)
@@ -827,6 +951,81 @@ using GreenDistrict.Simulation.Scenarios;
         {
             CreatedAtTick = Clock.CurrentTick
         });
+    }
+
+    private void UpdateWorldEvents()
+    {
+        if (Clock.CurrentTick <= 0) return;
+        if (Clock.CurrentTick - _lastWorldEventTick < WorldEventIntervalTicks) return;
+        if (Events.Any(e => e.Type == EventType.Decision && !e.IsResolved)) return;
+
+        var index = Math.Abs((int)(Clock.CurrentTick / WorldEventIntervalTicks + SimulationSeed)) % 3;
+        var gameEvent = index switch
+        {
+            0 => CreateRegionalInvestmentEvent(),
+            1 => CreateImportPressureEvent(),
+            _ => CreateMigrationWaveEvent()
+        };
+
+        gameEvent.CreatedAtTick = Clock.CurrentTick;
+        Events.Add(gameEvent);
+        _lastWorldEventTick = Clock.CurrentTick;
+    }
+
+    private static GameEvent CreateRegionalInvestmentEvent()
+    {
+        var gameEvent = new GameEvent(
+            "Regional investment offer",
+            "External investors are ready to fund local improvements, but expect visible coordination.",
+            EventType.Decision);
+        gameEvent.Choices.Add(new EventChoice("accept-investment", "Accept investment", "Take external funding and accept higher expectations.")
+        {
+            BudgetEffect = 1200f,
+            SupportEffect = 1f
+        });
+        gameEvent.Choices.Add(new EventChoice("decline-investment", "Decline investment", "Avoid outside pressure, but skip the funding.")
+        {
+            SupportEffect = 0.5f
+        });
+        return gameEvent;
+    }
+
+    private static GameEvent CreateImportPressureEvent()
+    {
+        var gameEvent = new GameEvent(
+            "Import price pressure",
+            "Outside suppliers raised prices. The city can absorb the shock or ask residents to adapt.",
+            EventType.Decision);
+        gameEvent.Choices.Add(new EventChoice("subsidize-imports", "Subsidize essentials", "Spend budget to protect residents from a price shock.")
+        {
+            BudgetEffect = -450f,
+            SupportEffect = 1.5f,
+            FoodSatisfactionEffect = 4f
+        });
+        gameEvent.Choices.Add(new EventChoice("let-prices-adjust", "Let prices adjust", "Save budget, but residents feel the pressure.")
+        {
+            SupportEffect = -1.5f,
+            FoodSatisfactionEffect = -3f
+        });
+        return gameEvent;
+    }
+
+    private static GameEvent CreateMigrationWaveEvent()
+    {
+        var gameEvent = new GameEvent(
+            "Migration interest",
+            "Nearby residents are considering moving in if the city signals that it can absorb growth.",
+            EventType.Decision);
+        gameEvent.Choices.Add(new EventChoice("welcome-newcomers", "Welcome newcomers", "Encourage growth and raise expectations for housing and jobs.")
+        {
+            SupportEffect = 1f,
+            HousingSatisfactionEffect = -2f
+        });
+        gameEvent.Choices.Add(new EventChoice("slow-growth", "Slow growth", "Keep pressure lower, but lose some public enthusiasm.")
+        {
+            SupportEffect = -0.5f
+        });
+        return gameEvent;
     }
 
     private void ReconcileScenarioJobs()
@@ -897,6 +1096,37 @@ using GreenDistrict.Simulation.Scenarios;
                 AddCitizenToHousehold(citizen, household);
             }
         }
+    }
+
+    private void ApplyDistrictStartingConditions(WorldScenario scenario)
+    {
+        foreach (var districtSeed in scenario.Districts)
+        {
+            var hasNeedOverride =
+                districtSeed.FoodSatisfaction.HasValue ||
+                districtSeed.HousingSatisfaction.HasValue ||
+                districtSeed.SafetySatisfaction.HasValue ||
+                districtSeed.HealthcareSatisfaction.HasValue ||
+                districtSeed.EntertainmentSatisfaction.HasValue;
+
+            if (!hasNeedOverride) continue;
+
+            foreach (var citizen in Citizens.Where(c => c.DistrictId == districtSeed.Id))
+            {
+                citizen.FoodSatisfaction = ClampScenarioNeed(districtSeed.FoodSatisfaction, citizen.FoodSatisfaction);
+                citizen.HousingSatisfaction = ClampScenarioNeed(districtSeed.HousingSatisfaction, citizen.HousingSatisfaction);
+                citizen.SafetySatisfaction = ClampScenarioNeed(districtSeed.SafetySatisfaction, citizen.SafetySatisfaction);
+                citizen.HealthcareSatisfaction = ClampScenarioNeed(districtSeed.HealthcareSatisfaction, citizen.HealthcareSatisfaction);
+                citizen.EntertainmentSatisfaction = ClampScenarioNeed(districtSeed.EntertainmentSatisfaction, citizen.EntertainmentSatisfaction);
+                citizen.RecalculateSatisfaction();
+                citizen.UpdateMood();
+            }
+        }
+    }
+
+    private static float ClampScenarioNeed(float? scenarioValue, float fallback)
+    {
+        return Math.Clamp(scenarioValue ?? fallback, 0f, 100f);
     }
 
     private static Citizen CreateGeneratedCitizen(int index, int districtId, int householdSlot)
@@ -1003,6 +1233,14 @@ using GreenDistrict.Simulation.Scenarios;
         return Enum.TryParse<ProjectType>(type, ignoreCase: true, out var parsed)
             ? parsed
             : ProjectType.Custom;
+    }
+
+    private enum CrisisReason
+    {
+        Support,
+        Safety,
+        Services,
+        Employment
     }
 }
 
