@@ -3,96 +3,96 @@
     {
       "key": "house.small",
       "type": "Housing",
-      "widthMeters": 8,
-      "lengthMeters": 10,
+      "widthMeters": 4,
+      "lengthMeters": 5,
       "accessSides": "Any",
       "assetKey": "building.house.small"
     },
     {
       "key": "house.medium",
       "type": "Housing",
-      "widthMeters": 10,
-      "lengthMeters": 14,
+      "widthMeters": 5,
+      "lengthMeters": 7,
       "accessSides": "Any",
       "assetKey": "building.house.medium"
     },
     {
       "key": "shop",
       "type": "Business",
-      "widthMeters": 12,
-      "lengthMeters": 16,
+      "widthMeters": 6,
+      "lengthMeters": 8,
       "accessSides": "Any",
       "assetKey": "business.shop"
     },
     {
       "key": "workshop",
       "type": "Business",
-      "widthMeters": 18,
-      "lengthMeters": 24,
+      "widthMeters": 9,
+      "lengthMeters": 12,
       "accessSides": "Any",
       "assetKey": "business.workshop"
     },
     {
       "key": "farm",
       "type": "Business",
-      "widthMeters": 24,
-      "lengthMeters": 18,
+      "widthMeters": 12,
+      "lengthMeters": 9,
       "accessSides": "Any",
       "assetKey": "business.farm"
     },
     {
       "key": "clinic",
       "type": "Service",
-      "widthMeters": 20,
-      "lengthMeters": 28,
+      "widthMeters": 10,
+      "lengthMeters": 14,
       "accessSides": "Any",
       "assetKey": "service.clinic"
     },
     {
       "key": "school",
       "type": "Service",
-      "widthMeters": 35,
-      "lengthMeters": 45,
+      "widthMeters": 18,
+      "lengthMeters": 22,
       "accessSides": "Any",
       "assetKey": "service.school"
     },
     {
       "key": "police",
       "type": "Service",
-      "widthMeters": 18,
-      "lengthMeters": 22,
+      "widthMeters": 9,
+      "lengthMeters": 11,
       "accessSides": "Any",
       "assetKey": "service.police"
     },
     {
       "key": "park.small",
       "type": "Park",
-      "widthMeters": 24,
-      "lengthMeters": 24,
+      "widthMeters": 12,
+      "lengthMeters": 12,
       "accessSides": "Any",
       "assetKey": "park.small"
     },
     {
       "key": "marker.event",
       "type": "Marker",
-      "widthMeters": 3,
-      "lengthMeters": 3,
+      "widthMeters": 2,
+      "lengthMeters": 2,
       "accessSides": "None",
       "assetKey": "marker.event"
     },
     {
       "key": "marker.crisis",
       "type": "Marker",
-      "widthMeters": 3,
-      "lengthMeters": 3,
+      "widthMeters": 2,
+      "lengthMeters": 2,
       "accessSides": "None",
       "assetKey": "marker.crisis"
     },
     {
       "key": "marker.decision",
       "type": "Marker",
-      "widthMeters": 3,
-      "lengthMeters": 3,
+      "widthMeters": 2,
+      "lengthMeters": 2,
       "accessSides": "None",
       "assetKey": "marker.decision"
     }

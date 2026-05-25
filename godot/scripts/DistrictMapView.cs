@@ -14,16 +14,22 @@ public partial class DistrictMapView : Control
     private const float DefaultZoom = 0.86f;
     private const float MaxZoom = 2.4f;
     private const float ZoomStep = 1.14f;
+    private const float CellPixelSize = 64f;
 
     [Signal]
     public delegate void DistrictSelectedEventHandler(int districtId);
 
+    [Signal]
+    public delegate void MapObjectSelectedEventHandler(string objectId);
+
     private readonly List<MapDistrictShape> _shapes = new();
     private readonly Dictionary<string, Texture2D?> _mapAssetCache = new(StringComparer.OrdinalIgnoreCase);
     private MapGridGenerationResult? _mapGeneration;
+    private int _mapGenerationKey;
     private WorldState? _world;
     private int? _selectedDistrictId;
     private int? _selectedEventId;
+    private string? _selectedMapObjectId;
     private int? _hoveredDistrictId;
     private Vector2 _lastSize;
     private float _zoom = DefaultZoom;
@@ -37,6 +43,7 @@ public partial class DistrictMapView : Control
     public override void _Ready()
     {
         ClipContents = true;
+        TextureFilter = TextureFilterEnum.Nearest;
         MouseFilter = MouseFilterEnum.Stop;
         Resized += () =>
         {
@@ -48,8 +55,8 @@ public partial class DistrictMapView : Control
 
     public override void _Draw()
     {
-        DrawRect(new Rect2(Vector2.Zero, Size), UiTheme.MapLand);
         DrawSetTransform(_pan, 0f, new Vector2(_zoom, _zoom));
+        DrawMapCanvasBackground();
 
         if (_renderGridFallback && _mapGeneration != null)
         {
@@ -107,7 +114,7 @@ public partial class DistrictMapView : Control
             }
 
             var mapPosition = ScreenToMap(motion.Position);
-            var hover = FindDistrictAt(mapPosition)?.District.Id;
+            var hover = IsSingleCityMode() ? null : FindDistrictAt(mapPosition)?.District.Id;
             if (hover != _hoveredDistrictId)
             {
                 _hoveredDistrictId = hover;
@@ -137,7 +144,21 @@ public partial class DistrictMapView : Control
 
             if (button is { Pressed: true, ButtonIndex: MouseButton.Left })
             {
-                SelectDistrictAt(ScreenToMap(button.Position));
+                if (SelectMapObjectAt(ScreenToMap(button.Position)))
+                {
+                    AcceptEvent();
+                    return;
+                }
+
+                if (!IsSingleCityMode())
+                {
+                    SelectDistrictAt(ScreenToMap(button.Position));
+                    AcceptEvent();
+                    return;
+                }
+
+                ClearMapObjectSelection();
+                AcceptEvent();
             }
         }
     }
@@ -164,8 +185,22 @@ public partial class DistrictMapView : Control
 
         var localPosition = GetLocalMousePosition();
         if (localPosition.X < 0f || localPosition.Y < 0f || localPosition.X > Size.X || localPosition.Y > Size.Y) return;
-        if (SelectDistrictAt(ScreenToMap(localPosition)))
+        var mapPosition = ScreenToMap(localPosition);
+        if (SelectMapObjectAt(mapPosition))
         {
+            GetViewport().SetInputAsHandled();
+            return;
+        }
+
+        if (!IsSingleCityMode() && SelectDistrictAt(mapPosition))
+        {
+            GetViewport().SetInputAsHandled();
+            return;
+        }
+
+        if (IsSingleCityMode())
+        {
+            ClearMapObjectSelection();
             GetViewport().SetInputAsHandled();
         }
     }
@@ -173,7 +208,13 @@ public partial class DistrictMapView : Control
     public void SetWorld(WorldState world)
     {
         _world = world ?? throw new ArgumentNullException(nameof(world));
-        _mapGeneration = new MapGridGenerator().Generate(_world);
+        var nextMapKey = BuildMapGenerationKey(_world);
+        if (_mapGeneration == null || nextMapKey != _mapGenerationKey)
+        {
+            _mapGeneration = new MapGridGenerator().Generate(_world);
+            _mapGenerationKey = nextMapKey;
+        }
+
         if (_lastSize != Size || !ShapesMatchWorld(_world))
         {
             RebuildShapes();
@@ -181,6 +222,61 @@ public partial class DistrictMapView : Control
 
         ClampPan();
         QueueRedraw();
+    }
+
+    private static int BuildMapGenerationKey(WorldState world)
+    {
+        unchecked
+        {
+            var hash = 17;
+            hash = hash * 31 + world.SimulationSeed;
+
+            foreach (var district in world.Districts.OrderBy(district => district.Id))
+            {
+                hash = hash * 31 + district.Id;
+                hash = hash * 31 + district.Name.GetHashCode(StringComparison.Ordinal);
+            }
+
+            foreach (var business in world.Businesses.OrderBy(business => business.Id))
+            {
+                hash = hash * 31 + business.Id;
+                hash = hash * 31 + (business.DistrictId ?? -1);
+                hash = hash * 31 + (int)business.Status;
+                hash = hash * 31 + business.Type.GetHashCode(StringComparison.OrdinalIgnoreCase);
+                hash = hash * 31 + business.ProductionType.GetHashCode(StringComparison.OrdinalIgnoreCase);
+            }
+
+            foreach (var housing in world.HousingUnits.OrderBy(housing => housing.Id))
+            {
+                hash = hash * 31 + housing.Id;
+                hash = hash * 31 + (housing.DistrictId ?? -1);
+                hash = hash * 31 + housing.Capacity;
+            }
+
+            foreach (var project in world.Projects.OrderBy(project => project.Id))
+            {
+                hash = hash * 31 + project.Id;
+                hash = hash * 31 + (project.DistrictId ?? -1);
+                hash = hash * 31 + (int)project.Type;
+                hash = hash * 31 + (project.Completed ? 1 : 0);
+            }
+
+            foreach (var gameEvent in world.Events.Where(gameEvent => !gameEvent.IsResolved).OrderBy(gameEvent => gameEvent.Id))
+            {
+                hash = hash * 31 + gameEvent.Id;
+                hash = hash * 31 + (int)gameEvent.Type;
+                hash = hash * 31 + (int)gameEvent.TargetEntityKind;
+                hash = hash * 31 + (gameEvent.TargetEntityId ?? -1);
+                hash = hash * 31 + (gameEvent.LocalBuildingEventKind.HasValue ? (int)gameEvent.LocalBuildingEventKind.Value : -1);
+                foreach (var choice in gameEvent.Choices.OrderBy(choice => choice.Id, StringComparer.Ordinal))
+                {
+                    hash = hash * 31 + choice.Id.GetHashCode(StringComparison.Ordinal);
+                    hash = hash * 31 + (choice.DistrictId ?? -1);
+                }
+            }
+
+            return hash;
+        }
     }
 
     private bool ShapesMatchWorld(WorldState world)
@@ -223,30 +319,37 @@ public partial class DistrictMapView : Control
     {
         if (_mapGeneration == null) return Vector2.Zero;
 
-        return new Vector2(
-            position.X / (float)_mapGeneration.Grid.WidthMeters * Size.X,
-            position.Y / (float)_mapGeneration.Grid.HeightMeters * Size.Y);
+        return new Vector2(position.X * CellPixelSize, position.Y * CellPixelSize);
     }
 
     private Rect2 GridCellToMapRect(GridPosition position)
     {
         if (_mapGeneration == null) return new Rect2(Vector2.Zero, Vector2.Zero);
 
-        var cellSize = new Vector2(
-            Size.X / _mapGeneration.Grid.WidthMeters,
-            Size.Y / _mapGeneration.Grid.HeightMeters);
-        return new Rect2(GridToMap(position), cellSize);
+        return new Rect2(GridToMap(position), GridCellMapSize());
     }
 
     private GridPosition MapToGrid(Vector2 mapPosition)
     {
         if (_mapGeneration == null) return new GridPosition(0, 0);
 
-        var x = (int)MathF.Floor(mapPosition.X / Math.Max(1f, Size.X) * _mapGeneration.Grid.WidthMeters);
-        var y = (int)MathF.Floor(mapPosition.Y / Math.Max(1f, Size.Y) * _mapGeneration.Grid.HeightMeters);
+        var x = (int)MathF.Floor(mapPosition.X / CellPixelSize);
+        var y = (int)MathF.Floor(mapPosition.Y / CellPixelSize);
         return new GridPosition(
             Math.Clamp(x, 0, _mapGeneration.Grid.WidthMeters - 1),
             Math.Clamp(y, 0, _mapGeneration.Grid.HeightMeters - 1));
+    }
+
+    private Vector2 GridCellMapSize()
+    {
+        return new Vector2(CellPixelSize, CellPixelSize);
+    }
+
+    private Vector2 MapCanvasSize()
+    {
+        return _mapGeneration == null
+            ? Size
+            : new Vector2(_mapGeneration.Grid.WidthMeters * CellPixelSize, _mapGeneration.Grid.HeightMeters * CellPixelSize);
     }
 
     private GridPosition ScreenToGrid(Vector2 screenPosition)
@@ -264,7 +367,7 @@ public partial class DistrictMapView : Control
         }
 
         _zoom = Math.Clamp(_zoom, MinZoom, MaxZoom);
-        var contentSize = Size * _zoom;
+        var contentSize = MapCanvasSize() * _zoom;
         _pan = new Vector2(
             ClampPanAxis(_pan.X, Size.X, contentSize.X),
             ClampPanAxis(_pan.Y, Size.Y, contentSize.Y));
@@ -277,7 +380,7 @@ public partial class DistrictMapView : Control
 
     private bool CanPan()
     {
-        var contentSize = Size * _zoom;
+        var contentSize = MapCanvasSize() * _zoom;
         return contentSize.X > Size.X + 0.5f || contentSize.Y > Size.Y + 0.5f;
     }
 
@@ -301,6 +404,18 @@ public partial class DistrictMapView : Control
     {
         _selectedEventId = eventId;
         QueueRedraw();
+    }
+
+    public void SetSelectedMapObject(string? objectId)
+    {
+        _selectedMapObjectId = string.IsNullOrWhiteSpace(objectId) ? null : objectId;
+        QueueRedraw();
+    }
+
+    public PlacedMapObject? GetMapObject(string? objectId)
+    {
+        if (_mapGeneration == null || string.IsNullOrWhiteSpace(objectId)) return null;
+        return _mapGeneration.Grid.Objects.TryGetValue(objectId, out var mapObject) ? mapObject : null;
     }
 
     private void RebuildShapes()
@@ -360,38 +475,42 @@ public partial class DistrictMapView : Control
         DrawGridDistrictLabels();
     }
 
+    private void DrawMapCanvasBackground()
+    {
+        var visibleTopLeft = ScreenToMap(Vector2.Zero);
+        var visibleSize = Size / Math.Max(0.001f, _zoom);
+        var rect = new Rect2(visibleTopLeft, visibleSize);
+        DrawRect(rect, UiTheme.MapLand);
+    }
+
     private void DrawGridSurfaces()
     {
         if (_mapGeneration == null) return;
 
         var grid = _mapGeneration.Grid;
-        var cellSize = new Vector2(Size.X / grid.WidthMeters, Size.Y / grid.HeightMeters);
-        for (var y = 0; y < grid.HeightMeters; y++)
+        var cellSize = GridCellMapSize();
+        var visibleTopLeft = ScreenToMap(Vector2.Zero);
+        var visibleBottomRight = ScreenToMap(Size);
+        var minX = Math.Clamp((int)MathF.Floor(visibleTopLeft.X / CellPixelSize) - 1, 0, grid.WidthMeters - 1);
+        var minY = Math.Clamp((int)MathF.Floor(visibleTopLeft.Y / CellPixelSize) - 1, 0, grid.HeightMeters - 1);
+        var maxX = Math.Clamp((int)MathF.Ceiling(visibleBottomRight.X / CellPixelSize) + 1, 0, grid.WidthMeters - 1);
+        var maxY = Math.Clamp((int)MathF.Ceiling(visibleBottomRight.Y / CellPixelSize) + 1, 0, grid.HeightMeters - 1);
+
+        for (var y = minY; y <= maxY; y++)
         {
-            var runStart = 0;
-            var runAssetKey = grid.GetSurfaceAssetKey(new GridPosition(0, y));
-
-            for (var x = 1; x <= grid.WidthMeters; x++)
+            for (var x = minX; x <= maxX; x++)
             {
-                var assetKey = x < grid.WidthMeters
-                    ? grid.GetSurfaceAssetKey(new GridPosition(x, y))
-                    : string.Empty;
-                if (assetKey == runAssetKey) continue;
-
-                var rect = new Rect2(
-                    new Vector2(runStart * cellSize.X, y * cellSize.Y),
-                    new Vector2((x - runStart) * cellSize.X, cellSize.Y));
-                if (TryGetMapTexture(runAssetKey, out var texture))
+                var position = new GridPosition(x, y);
+                var assetKey = grid.GetSurfaceAssetKey(position);
+                var rect = new Rect2(GridToMap(position), cellSize);
+                if (TryGetMapTexture(assetKey, out var texture))
                 {
-                    DrawTextureRect(texture, rect, tile: true);
+                    DrawTextureRect(texture, rect, tile: false);
                 }
                 else
                 {
-                    DrawRect(rect, SurfaceFallbackColor(runAssetKey));
+                    DrawRect(rect, SurfaceFallbackColor(assetKey));
                 }
-
-                runStart = x;
-                runAssetKey = assetKey;
             }
         }
     }
@@ -399,6 +518,7 @@ public partial class DistrictMapView : Control
     private void DrawGridDistrictAreas()
     {
         if (_mapGeneration == null) return;
+        if (IsSingleCityMode()) return;
 
         foreach (var area in _mapGeneration.DistrictAreas.Values)
         {
@@ -514,6 +634,11 @@ public partial class DistrictMapView : Control
                 DrawSelectedEventObjectHighlight(rect);
             }
 
+            if (IsSelectedMapObject(mapObject))
+            {
+                DrawSelectedMapObjectHighlight(rect);
+            }
+
             if (Math.Min(rect.Size.X, rect.Size.Y) >= 10f)
             {
                 DrawText(ObjectFallbackLabel(mapObject), rect.GetCenter() + new Vector2(-4f, 5f), 12, ObjectLabelColor(mapObject));
@@ -524,6 +649,7 @@ public partial class DistrictMapView : Control
     private void DrawGridDistrictLabels()
     {
         if (_mapGeneration == null || _world == null) return;
+        if (IsSingleCityMode()) return;
 
         foreach (var district in _world.Districts)
         {
@@ -541,7 +667,8 @@ public partial class DistrictMapView : Control
         if (_mapGeneration == null || Size.X <= 0f || Size.Y <= 0f) return;
 
         var grid = _mapGeneration.Grid;
-        var cellSize = new Vector2(Size.X / grid.WidthMeters, Size.Y / grid.HeightMeters);
+        var cellSize = GridCellMapSize();
+        var mapSize = MapCanvasSize();
         var districtTints = new[]
         {
             new Color(UiTheme.Info, 0.055f),
@@ -588,17 +715,17 @@ public partial class DistrictMapView : Control
         for (var x = 0; x <= grid.WidthMeters; x += 10)
         {
             var mapX = x * cellSize.X;
-            DrawLine(new Vector2(mapX, 0f), new Vector2(mapX, Size.Y), x % 50 == 0 ? majorLineColor : lineColor, x % 50 == 0 ? 1.2f : 0.6f);
+            DrawLine(new Vector2(mapX, 0f), new Vector2(mapX, mapSize.Y), x % 50 == 0 ? majorLineColor : lineColor, x % 50 == 0 ? 1.2f : 0.6f);
         }
 
         for (var y = 0; y <= grid.HeightMeters; y += 10)
         {
             var mapY = y * cellSize.Y;
-            DrawLine(new Vector2(0f, mapY), new Vector2(Size.X, mapY), y % 50 == 0 ? majorLineColor : lineColor, y % 50 == 0 ? 1.2f : 0.6f);
+            DrawLine(new Vector2(0f, mapY), new Vector2(mapSize.X, mapY), y % 50 == 0 ? majorLineColor : lineColor, y % 50 == 0 ? 1.2f : 0.6f);
         }
 
-        DrawRect(new Rect2(new Vector2(10f, Size.Y - 34f), new Vector2(330f, 25f)), new Color(UiTheme.PanelAlt, 0.88f));
-        DrawText("Grid debug: district / water / roads / objects (Ctrl+G), grid render (Ctrl+M)", new Vector2(18f, Size.Y - 16f), 12, UiTheme.Text);
+        DrawRect(new Rect2(new Vector2(10f, mapSize.Y - 34f), new Vector2(330f, 25f)), new Color(UiTheme.PanelAlt, 0.88f));
+        DrawText("Grid debug: district / water / roads / objects (Ctrl+G), grid render (Ctrl+M)", new Vector2(18f, mapSize.Y - 16f), 12, UiTheme.Text);
     }
 
     private void DrawWaterGeography()
@@ -988,6 +1115,12 @@ public partial class DistrictMapView : Control
             mapObject.EntityId == _selectedEventId;
     }
 
+    private bool IsSelectedMapObject(PlacedMapObject mapObject)
+    {
+        return !string.IsNullOrWhiteSpace(_selectedMapObjectId) &&
+            string.Equals(mapObject.Id, _selectedMapObjectId, StringComparison.Ordinal);
+    }
+
     private void DrawSelectedEventObjectHighlight(Rect2 rect)
     {
         var pulse = 0.55f + 0.45f * MathF.Sin((float)_animationTime * 4.2f);
@@ -996,6 +1129,13 @@ public partial class DistrictMapView : Control
         DrawRect(rect.Grow(7f + pulse * 2.5f), glow);
         DrawRect(rect.Grow(3f), border, false, 2.2f);
         DrawRect(rect.Grow(6f), new Color(border, 0.38f), false, 1.2f);
+    }
+
+    private void DrawSelectedMapObjectHighlight(Rect2 rect)
+    {
+        DrawRect(rect.Grow(6f), new Color(UiTheme.Info, 0.16f));
+        DrawRect(rect.Grow(2f), UiTheme.Info, false, 2.2f);
+        DrawRect(rect.Grow(5f), new Color(UiTheme.Info, 0.34f), false, 1.1f);
     }
 
     private IEnumerable<GameEvent> GetUnresolvedDistrictEvents(int districtId)
@@ -1067,13 +1207,11 @@ public partial class DistrictMapView : Control
 
         foreach (var path in MapAssetCandidates(assetKey))
         {
-            if (!ResourceLoader.Exists(path)) continue;
-
-            var loaded = ResourceLoader.Load<Texture2D>(path);
-            _mapAssetCache[assetKey] = loaded;
-            if (loaded == null) return false;
+            var loaded = LoadMapTexture(path);
+            if (loaded == null) continue;
 
             texture = loaded;
+            _mapAssetCache[assetKey] = loaded;
             return true;
         }
 
@@ -1086,6 +1224,20 @@ public partial class DistrictMapView : Control
         var normalized = assetKey.Trim().Replace('\\', '/');
         yield return $"res://assets/map/{normalized.Replace('.', '/')}.png";
         yield return $"res://assets/map/{normalized}.png";
+    }
+
+    private static Texture2D? LoadMapTexture(string path)
+    {
+        if (ResourceLoader.Exists(path))
+        {
+            var loaded = ResourceLoader.Load<Texture2D>(path);
+            if (loaded != null) return loaded;
+        }
+
+        var image = Image.LoadFromFile(ProjectSettings.GlobalizePath(path));
+        if (image == null || image.IsEmpty()) return null;
+
+        return ImageTexture.CreateFromImage(image);
     }
 
     private Rect2 GridAreaToMapRect(MapDistrictGridArea area)
@@ -1309,6 +1461,8 @@ public partial class DistrictMapView : Control
 
     private MapDistrictShape? FindDistrictAt(Vector2 point)
     {
+        if (IsSingleCityMode()) return null;
+
         if (_renderGridFallback && _mapGeneration != null)
         {
             foreach (var area in _mapGeneration.DistrictAreas.Values.OrderBy(area => area.DistrictId))
@@ -1330,6 +1484,8 @@ public partial class DistrictMapView : Control
 
     private bool SelectDistrictAt(Vector2 point)
     {
+        if (IsSingleCityMode()) return false;
+
         var shape = FindDistrictAt(point);
         if (shape == null) return false;
 
@@ -1337,6 +1493,42 @@ public partial class DistrictMapView : Control
         EmitSignal(SignalName.DistrictSelected, shape.District.Id);
         QueueRedraw();
         return true;
+    }
+
+    private bool SelectMapObjectAt(Vector2 point)
+    {
+        var mapObject = FindMapObjectAt(point);
+        if (mapObject == null) return false;
+
+        _selectedMapObjectId = mapObject.Id;
+        _selectedDistrictId = null;
+        EmitSignal(SignalName.MapObjectSelected, mapObject.Id);
+        QueueRedraw();
+        return true;
+    }
+
+    private void ClearMapObjectSelection()
+    {
+        if (string.IsNullOrWhiteSpace(_selectedMapObjectId))
+        {
+            EmitSignal(SignalName.MapObjectSelected, string.Empty);
+            return;
+        }
+
+        _selectedMapObjectId = null;
+        EmitSignal(SignalName.MapObjectSelected, string.Empty);
+        QueueRedraw();
+    }
+
+    private PlacedMapObject? FindMapObjectAt(Vector2 point)
+    {
+        if (_mapGeneration == null) return null;
+
+        return _mapGeneration.Grid.Objects.Values
+            .Where(mapObject => GridObjectToMapRect(mapObject).HasPoint(point))
+            .OrderBy(mapObject => mapObject.Type == PlacedMapObjectType.Marker ? 0 : 1)
+            .ThenBy(mapObject => mapObject.FootprintWidth * mapObject.FootprintLength)
+            .FirstOrDefault();
     }
 
     private static Vector2[] CreateDistrictPolygon(Rect2 rect, int seed)
@@ -1983,6 +2175,11 @@ public partial class DistrictMapView : Control
                $"Support: {FormatPercent(district.SupportRating)}\n" +
                $"Safety: {FormatPercent(district.AverageSafetySatisfaction)}\n" +
                $"Services: {FormatPercent(district.ServiceLevel)}";
+    }
+
+    private bool IsSingleCityMode()
+    {
+        return _world?.Districts.Count == 1;
     }
 
     private static string FormatPercent(float value)

@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using GreenDistrict.Simulation.Map;
 
 namespace GreenDistrict.Simulation.Core;
 
@@ -16,8 +17,13 @@ public class GameEvent
     public EventType Type { get; set; }
     public bool IsResolved { get; set; }
     public string? SelectedChoiceId { get; set; }
+    public MapObjectEntityKind TargetEntityKind { get; set; } = MapObjectEntityKind.None;
+    public int? TargetEntityId { get; set; }
+    public LocalBuildingEventKind? LocalBuildingEventKind { get; set; }
+    public float Severity { get; set; }
     public List<EventChoice> Choices { get; } = new();
     public bool HasChoices => Choices.Count > 0;
+    public bool HasTargetEntity => TargetEntityKind != MapObjectEntityKind.None && TargetEntityId.HasValue;
 
     public GameEvent(string title, string description, EventType type, int? id = null)
     {
@@ -31,6 +37,17 @@ public class GameEvent
         Description = description;
         Type = type;
     }
+}
+
+public enum LocalBuildingEventKind
+{
+    Fire,
+    Flood,
+    PowerOutage,
+    UtilityFailure,
+    Vandalism,
+    Sanitation,
+    StructuralWear
 }
 
 public class EventChoice

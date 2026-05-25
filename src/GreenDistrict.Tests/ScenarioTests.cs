@@ -1,6 +1,7 @@
 using System.IO;
 using System.Linq;
 using GreenDistrict.Simulation.Core;
+using GreenDistrict.Simulation.Map;
 using GreenDistrict.Simulation.Scenarios;
 using Xunit;
 
@@ -17,25 +18,22 @@ public class ScenarioTests
 
         Assert.Equal(10000f, world.Budget);
         Assert.Equal(75f, world.SupportRating);
-        Assert.True(world.Districts.Count >= 3);
+        var city = Assert.Single(world.Districts);
+        Assert.Equal("Green District", city.Name);
         Assert.Equal(6, world.Businesses.Count);
-        Assert.Equal(50, world.Citizens.Count);
-        Assert.True(world.Households.Count >= 12);
-        Assert.True(world.HousingUnits.Sum(h => h.Capacity) >= 50);
+        Assert.Equal(100, world.Citizens.Count);
+        Assert.True(world.Households.Count >= 25);
+        Assert.True(world.HousingUnits.Sum(h => h.Capacity) >= 100);
         Assert.Equal(3, world.Projects.Count);
-        Assert.Contains(world.Businesses, b => b.Name == "Central Farm" && b.BaseOutput > 0f && b.UnitPrice > 0f);
+        Assert.Contains(world.Businesses, b => b.Name == "City Farm" && b.BaseOutput > 0f && b.UnitPrice > 0f);
         Assert.Contains(world.Citizens, c => c.Name == "Maria Green" && c.EmploymentStatus == EmploymentStatus.Employed);
         Assert.Contains(world.Households, h => h.MemberCount == 3 && h.HousingCapacity == 4);
         Assert.Contains(world.HousingUnits, h => h.Id == 1 && h.IsOccupied);
-        Assert.Contains(world.Businesses, b => b.DistrictId == 1);
-        Assert.Contains(world.Businesses, b => b.DistrictId == 2);
-        Assert.Contains(world.Businesses, b => b.DistrictId == 3);
-        Assert.Contains(world.Citizens, c => c.DistrictId == 1);
-        Assert.Contains(world.Citizens, c => c.DistrictId == 2);
-        Assert.Contains(world.Citizens, c => c.DistrictId == 3);
+        Assert.All(world.Businesses, b => Assert.Equal(1, b.DistrictId));
+        Assert.All(world.Citizens, c => Assert.Equal(1, c.DistrictId));
         Assert.Contains(world.Projects, p => p.Type == ProjectType.Park && p.DistrictId == 1);
-        Assert.Contains(world.Projects, p => p.Type == ProjectType.Housing && p.DistrictId == 2);
-        Assert.Contains(world.Projects, p => p.Type == ProjectType.Police && p.DistrictId == 3);
+        Assert.Contains(world.Projects, p => p.Type == ProjectType.Housing && p.DistrictId == 1);
+        Assert.Contains(world.Projects, p => p.Type == ProjectType.Police && p.DistrictId == 1);
     }
 
     [Fact]
@@ -116,8 +114,8 @@ public class ScenarioTests
         Assert.NotEmpty(world.Households);
         Assert.NotEmpty(world.HousingUnits);
         Assert.NotEmpty(world.Projects);
-        Assert.True(world.Districts.Count >= 3);
-        Assert.Equal(50, world.GetTotalPopulation());
+        Assert.Single(world.Districts);
+        Assert.Equal(100, world.GetTotalPopulation());
         Assert.True(world.HousingUnits.Sum(h => h.Capacity) >= world.GetTotalPopulation());
         Assert.True(world.Businesses.Sum(b => b.MaxEmployees) >= world.Citizens.Count(c => c.LifeStage == LifeStage.Adult && !c.IsRetired));
         Assert.All(world.Districts, district =>
@@ -135,35 +133,49 @@ public class ScenarioTests
 
         world.Initialize(scenario);
 
-        Assert.Equal(50, world.GetTotalPopulation());
-        Assert.True(world.Districts.Count >= 3);
-        Assert.True(world.Households.Count >= 12);
-        Assert.True(world.HousingUnits.Sum(h => h.Capacity) >= 50);
-        Assert.All(world.Districts, district => Assert.True(district.Population > 0));
+        Assert.Equal(100, world.GetTotalPopulation());
+        var city = Assert.Single(world.Districts);
+        Assert.True(world.Households.Count >= 25);
+        Assert.True(world.HousingUnits.Sum(h => h.Capacity) >= 100);
+        Assert.True(city.Population > 0);
         Assert.InRange(world.LastUnemploymentRate, 0f, 25f);
     }
 
     [Fact]
-    public void BuiltIn_DefaultScenario_Starts_With_Distinct_District_Problems()
+    public void BuiltIn_DefaultScenario_Starts_With_Single_City_Context()
     {
         var scenario = WorldScenarioLoader.CreateDefault();
         var world = new WorldState();
 
         world.Initialize(scenario);
 
-        var central = Assert.Single(world.Districts, d => d.Name == "Central");
-        var north = Assert.Single(world.Districts, d => d.Name == "North Residential");
-        var south = Assert.Single(world.Districts, d => d.Name == "South Works");
-        var northWorkforce = world.Citizens.Count(c =>
-            c.DistrictId == north.Id &&
-            c.LifeStage == LifeStage.Adult &&
-            !c.IsRetired);
+        var city = Assert.Single(world.Districts);
 
-        Assert.InRange(central.AverageEntertainmentSatisfaction, 0f, 55f);
-        Assert.InRange(north.AverageHousingSatisfaction, 0f, 55f);
-        Assert.InRange(north.AverageHealthcareSatisfaction, 0f, 60f);
-        Assert.True(north.TotalJobs < northWorkforce, "North Residential should start with fewer local jobs than resident workers.");
-        Assert.InRange(south.AverageSafetySatisfaction, 0f, 50f);
+        Assert.Equal("Green District", city.Name);
+        Assert.Equal(100, city.Population);
+        Assert.All(world.Businesses, business => Assert.Equal(city.Id, business.DistrictId));
+        Assert.All(world.HousingUnits, housing => Assert.Equal(city.Id, housing.DistrictId));
+        Assert.All(world.Projects, project => Assert.Equal(city.Id, project.DistrictId));
+        Assert.InRange(city.AverageEntertainmentSatisfaction, 0f, 80f);
+        Assert.InRange(city.AverageSafetySatisfaction, 0f, 85f);
+    }
+
+    [Fact]
+    public void WorldState_Generates_Local_Building_Event_With_Target()
+    {
+        var scenario = WorldScenarioLoader.CreateDefault();
+        var world = new WorldState(scenario.Seed);
+        world.Initialize(scenario);
+
+        SimulationRunner.Run(world, ticksToRun: 10 * 1440);
+
+        var localEvent = Assert.Single(world.Events.Where(gameEvent => gameEvent.HasTargetEntity));
+        Assert.NotEqual(MapObjectEntityKind.None, localEvent.TargetEntityKind);
+        Assert.NotNull(localEvent.TargetEntityId);
+        Assert.NotNull(localEvent.LocalBuildingEventKind);
+        Assert.InRange(localEvent.Severity, 1f, 3f);
+        Assert.True(localEvent.HasChoices);
+        Assert.All(localEvent.Choices, choice => Assert.Equal(1, choice.DistrictId));
     }
 
     [Fact]

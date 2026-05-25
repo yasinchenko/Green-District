@@ -32,7 +32,10 @@ using GreenDistrict.Simulation.Map;
     private const float CrisisAidGrant = 1000f;
     private const int CrisisEventCooldownTicks = 1440 * 14;
     private const int WorldEventIntervalTicks = 1440 * 21;
+    private const int LocalBuildingEventIntervalTicks = 1440 * 10;
+    private const int MaxUnresolvedLocalBuildingEvents = 3;
     private long _lastWorldEventTick = -WorldEventIntervalTicks;
+    private long _lastLocalBuildingEventTick;
     
     // Core collections
     public List<Citizen> Citizens { get; } = new();
@@ -149,6 +152,7 @@ using GreenDistrict.Simulation.Map;
         _updateManager.Register(UpdatePhase.PoliticalSupportUpdate, UpdatePoliticalSupport);
         _updateManager.Register(UpdatePhase.ElectionCheck, CheckElection);
         _updateManager.Register(UpdatePhase.NotificationGeneration, UpdateWorldEvents);
+        _updateManager.Register(UpdatePhase.NotificationGeneration, UpdateLocalBuildingEvents);
         _demographySystem = CreateDemographySystem();
         // Demography: run aging/births/deaths on TimeUpdate (annual within DemographySystem)
         _updateManager.Register(UpdatePhase.TimeUpdate, () => _demographySystem.UpdateTick(this));
@@ -645,6 +649,7 @@ using GreenDistrict.Simulation.Map;
         ElectionCount = 0;
         _mapAccessibility = null;
         _lastWorldEventTick = -WorldEventIntervalTicks;
+        _lastLocalBuildingEventTick = 0;
     }
 
     internal void RestoreRuntimeMetrics(
@@ -972,6 +977,146 @@ using GreenDistrict.Simulation.Map;
         _lastWorldEventTick = Clock.CurrentTick;
     }
 
+    private void UpdateLocalBuildingEvents()
+    {
+        if (Clock.CurrentTick <= 0) return;
+        if (Clock.CurrentTick - _lastLocalBuildingEventTick < LocalBuildingEventIntervalTicks) return;
+
+        var unresolvedLocalEvents = Events.Count(e => !e.IsResolved && e.HasTargetEntity);
+        if (unresolvedLocalEvents >= MaxUnresolvedLocalBuildingEvents) return;
+
+        var targets = LocalBuildingEventTargets()
+            .Where(target => !Events.Any(e =>
+                !e.IsResolved &&
+                e.TargetEntityKind == target.Kind &&
+                e.TargetEntityId == target.Id))
+            .OrderBy(target => StableHash(SimulationSeed, (int)(Clock.CurrentTick / LocalBuildingEventIntervalTicks), (int)target.Kind, target.Id))
+            .ToList();
+        if (targets.Count == 0) return;
+
+        var selected = targets[0];
+        var eventKinds = Enum.GetValues<LocalBuildingEventKind>();
+        var kind = eventKinds[Math.Abs(StableHash(SimulationSeed, selected.Id, (int)Clock.CurrentTick)) % eventKinds.Length];
+        var severity = 1f + Math.Abs(StableHash(SimulationSeed, selected.Id, (int)kind, 31)) % 3;
+        var gameEvent = CreateLocalBuildingEvent(selected, kind, severity);
+        Events.Add(gameEvent);
+        _lastLocalBuildingEventTick = Clock.CurrentTick;
+    }
+
+    private IEnumerable<LocalBuildingEventTarget> LocalBuildingEventTargets()
+    {
+        foreach (var business in Businesses.Where(business => business.Status == BusinessStatus.Active && business.DistrictId.HasValue))
+        {
+            yield return new LocalBuildingEventTarget(MapObjectEntityKind.Business, business.Id, business.DistrictId, business.Name);
+        }
+
+        foreach (var housing in HousingUnits.Where(housing => housing.DistrictId.HasValue && housing.IsOccupied))
+        {
+            yield return new LocalBuildingEventTarget(
+                MapObjectEntityKind.HousingUnit,
+                housing.Id,
+                housing.DistrictId,
+                $"Housing #{housing.Id}");
+        }
+
+        foreach (var project in Projects.Where(project => project.DistrictId.HasValue))
+        {
+            yield return new LocalBuildingEventTarget(MapObjectEntityKind.GovernmentProject, project.Id, project.DistrictId, project.Name);
+        }
+    }
+
+    private GameEvent CreateLocalBuildingEvent(LocalBuildingEventTarget target, LocalBuildingEventKind kind, float severity)
+    {
+        var gameEvent = new GameEvent(
+            $"{LocalBuildingEventTitle(kind)}: {target.Name}",
+            LocalBuildingEventDescription(target.Name, kind, severity),
+            LocalBuildingEventType(kind))
+        {
+            CreatedAtTick = Clock.CurrentTick,
+            TargetEntityKind = target.Kind,
+            TargetEntityId = target.Id,
+            LocalBuildingEventKind = kind,
+            Severity = severity
+        };
+
+        var responseCost = LocalBuildingEventResponseCost(kind, severity);
+        gameEvent.Choices.Add(new EventChoice("rapid-response", "Rapid response", "Send city crews and stabilize the affected building.")
+        {
+            DistrictId = target.DistrictId,
+            BudgetEffect = -responseCost,
+            SupportEffect = 0.8f,
+            SafetySatisfactionEffect = kind is LocalBuildingEventKind.Fire or LocalBuildingEventKind.Vandalism ? 2.5f : 0.8f,
+            HealthcareSatisfactionEffect = kind is LocalBuildingEventKind.Sanitation or LocalBuildingEventKind.Flood ? 2.0f : 0.4f,
+            HousingSatisfactionEffect = target.Kind == MapObjectEntityKind.HousingUnit ? 2.0f : 0.4f
+        });
+        gameEvent.Choices.Add(new EventChoice("defer-response", "Defer response", "Avoid immediate spending, but residents notice the delay.")
+        {
+            DistrictId = target.DistrictId,
+            SupportEffect = -0.8f * severity,
+            SafetySatisfactionEffect = kind is LocalBuildingEventKind.Fire or LocalBuildingEventKind.Vandalism ? -1.8f * severity : -0.4f * severity,
+            HealthcareSatisfactionEffect = kind is LocalBuildingEventKind.Sanitation or LocalBuildingEventKind.Flood ? -1.4f * severity : -0.3f * severity,
+            HousingSatisfactionEffect = target.Kind == MapObjectEntityKind.HousingUnit ? -1.2f * severity : -0.3f * severity
+        });
+
+        return gameEvent;
+    }
+
+    private static string LocalBuildingEventTitle(LocalBuildingEventKind kind)
+    {
+        return kind switch
+        {
+            LocalBuildingEventKind.Fire => "Fire reported",
+            LocalBuildingEventKind.Flood => "Flooding",
+            LocalBuildingEventKind.PowerOutage => "Power outage",
+            LocalBuildingEventKind.UtilityFailure => "Utility failure",
+            LocalBuildingEventKind.Vandalism => "Vandalism",
+            LocalBuildingEventKind.Sanitation => "Sanitation issue",
+            _ => "Structural wear"
+        };
+    }
+
+    private static string LocalBuildingEventDescription(string targetName, LocalBuildingEventKind kind, float severity)
+    {
+        var impact = severity >= 3f ? "high" : severity >= 2f ? "moderate" : "limited";
+        return kind switch
+        {
+            LocalBuildingEventKind.Fire => $"{targetName} has a fire incident with {impact} risk to nearby residents.",
+            LocalBuildingEventKind.Flood => $"{targetName} is affected by flooding and needs cleanup crews.",
+            LocalBuildingEventKind.PowerOutage => $"{targetName} lost power and service continuity is at risk.",
+            LocalBuildingEventKind.UtilityFailure => $"{targetName} has a utility failure that may interrupt daily operations.",
+            LocalBuildingEventKind.Vandalism => $"{targetName} was damaged by vandalism and needs a response.",
+            LocalBuildingEventKind.Sanitation => $"{targetName} has a sanitation issue that can hurt public health.",
+            _ => $"{targetName} shows structural wear and needs inspection."
+        };
+    }
+
+    private static EventType LocalBuildingEventType(LocalBuildingEventKind kind)
+    {
+        return kind switch
+        {
+            LocalBuildingEventKind.Fire or LocalBuildingEventKind.Flood => EventType.Crisis,
+            LocalBuildingEventKind.Vandalism => EventType.Social,
+            LocalBuildingEventKind.PowerOutage or LocalBuildingEventKind.UtilityFailure => EventType.Economic,
+            _ => EventType.Decision
+        };
+    }
+
+    private static float LocalBuildingEventResponseCost(LocalBuildingEventKind kind, float severity)
+    {
+        var baseCost = kind switch
+        {
+            LocalBuildingEventKind.Fire => 650f,
+            LocalBuildingEventKind.Flood => 520f,
+            LocalBuildingEventKind.PowerOutage => 360f,
+            LocalBuildingEventKind.UtilityFailure => 420f,
+            LocalBuildingEventKind.Vandalism => 280f,
+            LocalBuildingEventKind.Sanitation => 340f,
+            _ => 460f
+        };
+
+        return baseCost * Math.Clamp(severity, 1f, 3f);
+    }
+
     private static GameEvent CreateRegionalInvestmentEvent()
     {
         var gameEvent = new GameEvent(
@@ -988,6 +1133,20 @@ using GreenDistrict.Simulation.Map;
             SupportEffect = 0.5f
         });
         return gameEvent;
+    }
+
+    private static int StableHash(params int[] values)
+    {
+        unchecked
+        {
+            var hash = 17;
+            foreach (var value in values)
+            {
+                hash = hash * 31 + value;
+            }
+
+            return hash == int.MinValue ? 0 : Math.Abs(hash);
+        }
     }
 
     private static GameEvent CreateImportPressureEvent()
@@ -1027,6 +1186,12 @@ using GreenDistrict.Simulation.Map;
         });
         return gameEvent;
     }
+
+    private readonly record struct LocalBuildingEventTarget(
+        MapObjectEntityKind Kind,
+        int Id,
+        int? DistrictId,
+        string Name);
 
     private void ReconcileScenarioJobs()
     {

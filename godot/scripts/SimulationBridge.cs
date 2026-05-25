@@ -20,12 +20,13 @@ public partial class SimulationBridge : Node
         }
     }
 
-    public void ResetWorld(int seed = 0)
+    public void ResetWorld(int? seed = null)
     {
+        var worldSeed = seed ?? Random.Shared.Next(1, int.MaxValue);
         var scenario = WorldScenarioLoader.CreateDefault();
-        scenario.Seed = seed;
+        scenario.Seed = worldSeed;
 
-        World = new WorldState(seed);
+        World = new WorldState(worldSeed);
         World.Initialize(scenario);
     }
 
@@ -35,16 +36,17 @@ public partial class SimulationBridge : Node
         SimulationRunner.Run(World, ticks);
     }
 
-    public bool StartProject(ProjectType type, int? districtId)
+    public GovernmentProject? StartProject(ProjectType type, int? districtId)
     {
         var project = GovernmentProject.CreateTyped(type, districtId);
         var started = World.Government.StartProject(World, project);
         if (started)
         {
             World.DistrictsSystem.UpdateDistrictAggregates(World);
+            return project;
         }
 
-        return started;
+        return null;
     }
 
     public bool ResolveEventChoice(int eventId, string choiceId)

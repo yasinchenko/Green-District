@@ -5,6 +5,7 @@ namespace GreenDistrict.Simulation.Core;
 public class GovernmentProject
 {
     private static int _nextId = 1;
+    private const int TicksPerDay = 1440;
     public int Id { get; }
     public string Name { get; set; }
     public float Cost { get; set; }
@@ -49,29 +50,29 @@ public class GovernmentProject
     {
         var project = type switch
         {
-            ProjectType.Road => new GovernmentProject("Road Repair", 1200f, 20)
+            ProjectType.Road => new GovernmentProject("Road Repair", 1200f, Days(20))
             {
                 SafetySatisfactionEffect = 3f,
                 EntertainmentSatisfactionEffect = 2f,
                 SupportEffect = 1f
             },
-            ProjectType.Clinic => new GovernmentProject("Community Clinic", 2500f, 35)
+            ProjectType.Clinic => new GovernmentProject("Community Clinic", 2500f, Days(35))
             {
                 HealthcareSatisfactionEffect = 14f,
                 SupportEffect = 2f
             },
-            ProjectType.School => new GovernmentProject("Public School", 3000f, 45)
+            ProjectType.School => new GovernmentProject("Public School", 3000f, Days(45))
             {
                 HealthcareSatisfactionEffect = 4f,
                 EntertainmentSatisfactionEffect = 6f,
                 SupportEffect = 2f
             },
-            ProjectType.Police => new GovernmentProject("Police Station", 2200f, 30)
+            ProjectType.Police => new GovernmentProject("Police Station", 2200f, Days(30))
             {
                 SafetySatisfactionEffect = 15f,
                 SupportEffect = 1.5f
             },
-            ProjectType.Housing => new GovernmentProject("Affordable Housing", 3500f, 50)
+            ProjectType.Housing => new GovernmentProject("Affordable Housing", 3500f, Days(50))
             {
                 HousingSatisfactionEffect = 10f,
                 SupportEffect = 2f,
@@ -79,7 +80,7 @@ public class GovernmentProject
                 HousingUnitCapacity = 3,
                 HousingUnitRentPerTick = 18f
             },
-            ProjectType.Park => new GovernmentProject("Public Park", 1400f, 25)
+            ProjectType.Park => new GovernmentProject("Public Park", 1400f, Days(25))
             {
                 EntertainmentSatisfactionEffect = 12f,
                 HealthcareSatisfactionEffect = 3f,
@@ -91,6 +92,11 @@ public class GovernmentProject
         project.Type = type;
         project.DistrictId = districtId;
         return project;
+    }
+
+    private static int Days(int days)
+    {
+        return days * TicksPerDay;
     }
 }
 

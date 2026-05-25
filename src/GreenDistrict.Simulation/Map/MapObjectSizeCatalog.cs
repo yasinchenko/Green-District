@@ -36,18 +36,18 @@ public sealed class MapObjectSizeCatalog
 
     public static MapObjectSizeCatalog Defaults { get; } = new(new[]
     {
-        new MapObjectSizeDefinition("house.small", PlacedMapObjectType.Housing, 8, 10, MapAccessSide.Any, "building.house.small"),
-        new MapObjectSizeDefinition("house.medium", PlacedMapObjectType.Housing, 10, 14, MapAccessSide.Any, "building.house.medium"),
-        new MapObjectSizeDefinition("shop", PlacedMapObjectType.Business, 12, 16, MapAccessSide.Any, "business.shop"),
-        new MapObjectSizeDefinition("workshop", PlacedMapObjectType.Business, 18, 24, MapAccessSide.Any, "business.workshop"),
-        new MapObjectSizeDefinition("farm", PlacedMapObjectType.Business, 24, 18, MapAccessSide.Any, "business.farm"),
-        new MapObjectSizeDefinition("clinic", PlacedMapObjectType.Service, 20, 28, MapAccessSide.Any, "service.clinic"),
-        new MapObjectSizeDefinition("school", PlacedMapObjectType.Service, 35, 45, MapAccessSide.Any, "service.school"),
-        new MapObjectSizeDefinition("police", PlacedMapObjectType.Service, 18, 22, MapAccessSide.Any, "service.police"),
-        new MapObjectSizeDefinition("park.small", PlacedMapObjectType.Park, 24, 24, MapAccessSide.Any, "park.small"),
-        new MapObjectSizeDefinition("marker.event", PlacedMapObjectType.Marker, 3, 3, MapAccessSide.None, "marker.event"),
-        new MapObjectSizeDefinition("marker.crisis", PlacedMapObjectType.Marker, 3, 3, MapAccessSide.None, "marker.crisis"),
-        new MapObjectSizeDefinition("marker.decision", PlacedMapObjectType.Marker, 3, 3, MapAccessSide.None, "marker.decision")
+        new MapObjectSizeDefinition("house.small", PlacedMapObjectType.Housing, 4, 5, MapAccessSide.Any, "building.house.small"),
+        new MapObjectSizeDefinition("house.medium", PlacedMapObjectType.Housing, 5, 7, MapAccessSide.Any, "building.house.medium"),
+        new MapObjectSizeDefinition("shop", PlacedMapObjectType.Business, 6, 8, MapAccessSide.Any, "business.shop"),
+        new MapObjectSizeDefinition("workshop", PlacedMapObjectType.Business, 9, 12, MapAccessSide.Any, "business.workshop"),
+        new MapObjectSizeDefinition("farm", PlacedMapObjectType.Business, 12, 9, MapAccessSide.Any, "business.farm"),
+        new MapObjectSizeDefinition("clinic", PlacedMapObjectType.Service, 10, 14, MapAccessSide.Any, "service.clinic"),
+        new MapObjectSizeDefinition("school", PlacedMapObjectType.Service, 18, 22, MapAccessSide.Any, "service.school"),
+        new MapObjectSizeDefinition("police", PlacedMapObjectType.Service, 9, 11, MapAccessSide.Any, "service.police"),
+        new MapObjectSizeDefinition("park.small", PlacedMapObjectType.Park, 12, 12, MapAccessSide.Any, "park.small"),
+        new MapObjectSizeDefinition("marker.event", PlacedMapObjectType.Marker, 2, 2, MapAccessSide.None, "marker.event"),
+        new MapObjectSizeDefinition("marker.crisis", PlacedMapObjectType.Marker, 2, 2, MapAccessSide.None, "marker.crisis"),
+        new MapObjectSizeDefinition("marker.decision", PlacedMapObjectType.Marker, 2, 2, MapAccessSide.None, "marker.decision")
     });
 
     public static MapObjectSizeCatalog LoadConfiguredOrDefaults()

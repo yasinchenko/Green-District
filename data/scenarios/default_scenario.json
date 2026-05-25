@@ -8,39 +8,23 @@
   "projectOperatingExpensePerTick": 5,
   "seed": 0,
   "economicTickInterval": 1440,
-  "initialPopulation": 50,
+  "initialPopulation": 100,
   "districts": [
     {
       "id": 1,
-      "name": "Central",
+      "name": "Green District",
       "housingSatisfaction": 72,
       "safetySatisfaction": 68,
       "healthcareSatisfaction": 70,
       "entertainmentSatisfaction": 45
-    },
-    {
-      "id": 2,
-      "name": "North Residential",
-      "housingSatisfaction": 42,
-      "safetySatisfaction": 64,
-      "healthcareSatisfaction": 48,
-      "entertainmentSatisfaction": 58
-    },
-    {
-      "id": 3,
-      "name": "South Works",
-      "housingSatisfaction": 64,
-      "safetySatisfaction": 38,
-      "healthcareSatisfaction": 62,
-      "entertainmentSatisfaction": 52
     }
   ],
   "businesses": [
     {
       "id": 1,
-      "name": "Central Farm",
+      "name": "City Farm",
       "type": "farm",
-      "maxEmployees": 18,
+      "maxEmployees": 24,
       "districtId": 1,
       "wagePerEmployee": 35,
       "productionType": "food",
@@ -53,9 +37,9 @@
     },
     {
       "id": 2,
-      "name": "Central Shop",
+      "name": "City Market",
       "type": "shop",
-      "maxEmployees": 14,
+      "maxEmployees": 18,
       "districtId": 1,
       "wagePerEmployee": 38,
       "productionType": "trade",
@@ -68,10 +52,10 @@
     },
     {
       "id": 3,
-      "name": "South Workshop",
+      "name": "City Workshop",
       "type": "workshop",
-      "maxEmployees": 14,
-      "districtId": 3,
+      "maxEmployees": 20,
+      "districtId": 1,
       "wagePerEmployee": 36,
       "productionType": "goods",
       "baseOutput": 650,
@@ -83,9 +67,9 @@
     },
     {
       "id": 4,
-      "name": "Central Clinic",
+      "name": "City Clinic",
       "type": "clinic",
-      "maxEmployees": 8,
+      "maxEmployees": 12,
       "districtId": 1,
       "wagePerEmployee": 42,
       "productionType": "services",
@@ -98,10 +82,10 @@
     },
     {
       "id": 5,
-      "name": "North Market",
+      "name": "Neighborhood Store",
       "type": "shop",
-      "maxEmployees": 10,
-      "districtId": 2,
+      "maxEmployees": 16,
+      "districtId": 1,
       "wagePerEmployee": 34,
       "productionType": "trade",
       "baseOutput": 220,
@@ -113,10 +97,10 @@
     },
     {
       "id": 6,
-      "name": "South Depot",
+      "name": "City Depot",
       "type": "factory",
-      "maxEmployees": 12,
-      "districtId": 3,
+      "maxEmployees": 18,
+      "districtId": 1,
       "wagePerEmployee": 37,
       "productionType": "goods",
       "baseOutput": 520,
@@ -148,19 +132,19 @@
     },
     {
       "id": 4,
-      "districtId": 2,
+      "districtId": 1,
       "capacity": 4,
       "rentPerTick": 18
     },
     {
       "id": 5,
-      "districtId": 2,
+      "districtId": 1,
       "capacity": 3,
       "rentPerTick": 20
     },
     {
       "id": 6,
-      "districtId": 3,
+      "districtId": 1,
       "capacity": 3,
       "rentPerTick": 16
     }
@@ -172,7 +156,7 @@
       "profession": "Worker",
       "gender": "Female",
       "districtId": 1,
-      "job": "Central Farm"
+      "job": "City Farm"
     },
     {
       "name": "Ivan Green",
@@ -180,7 +164,7 @@
       "profession": "Worker",
       "gender": "Male",
       "districtId": 1,
-      "job": "Central Farm"
+      "job": "City Farm"
     },
     {
       "name": "Sofia Green",
@@ -194,24 +178,24 @@
       "age": 35,
       "profession": "Trader",
       "gender": "Female",
-      "districtId": 2,
-      "job": "North Market"
+      "districtId": 1,
+      "job": "Neighborhood Store"
     },
     {
       "name": "Dmitry Forge",
       "age": 42,
       "profession": "Worker",
       "gender": "Male",
-      "districtId": 3,
-      "job": "South Workshop"
+      "districtId": 1,
+      "job": "City Workshop"
     },
     {
       "name": "Elena Forge",
       "age": 39,
       "profession": "Worker",
       "gender": "Female",
-      "districtId": 3,
-      "job": "South Depot"
+      "districtId": 1,
+      "job": "City Depot"
     }
   ],
   "households": [
@@ -227,7 +211,7 @@
       ]
     },
     {
-      "districtId": 2,
+      "districtId": 1,
       "housingUnitId": 4,
       "housingCapacity": 4,
       "rentPerTick": 18,
@@ -236,7 +220,7 @@
       ]
     },
     {
-      "districtId": 3,
+      "districtId": 1,
       "housingUnitId": 6,
       "housingCapacity": 3,
       "rentPerTick": 16,
@@ -249,26 +233,26 @@
   "projects": [
     {
       "id": 1,
-      "name": "Central Park",
+      "name": "City Park",
       "type": "Park",
       "districtId": 1,
-      "remainingTicks": 25,
+      "remainingTicks": 36000,
       "startTick": -1
     },
     {
       "id": 2,
-      "name": "North Housing Block",
+      "name": "City Housing Block",
       "type": "Housing",
-      "districtId": 2,
-      "remainingTicks": 35,
+      "districtId": 1,
+      "remainingTicks": 50400,
       "startTick": -1
     },
     {
       "id": 3,
-      "name": "South Safety Office",
+      "name": "City Safety Office",
       "type": "Police",
-      "districtId": 3,
-      "remainingTicks": 30,
+      "districtId": 1,
+      "remainingTicks": 43200,
       "startTick": -1
     }
   ]

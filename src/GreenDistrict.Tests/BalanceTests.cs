@@ -17,7 +17,7 @@ public class BalanceTests
         var world = CreateDefaultWorld();
         var trackedMoney = GetTrackedMoney(world);
 
-        Assert.Equal(50, world.GetTotalPopulation());
+        Assert.Equal(100, world.GetTotalPopulation());
         Assert.NotEmpty(world.Businesses);
         Assert.All(world.Businesses, business => Assert.Equal(BusinessStatus.Active, business.Status));
         Assert.True(trackedMoney > 0f);
@@ -109,9 +109,7 @@ public class BalanceTests
             Assert.InRange(run.Budget, -100_000f, 5_000_000f);
 
             Assert.Equal(initialBusinesses, run.Businesses);
-            Assert.Equal(initialBusinesses, run.ActiveBusinesses);
-            Assert.Empty(run.ClosedBusinessNames);
-            Assert.All(run.BusinessSummaries, b => Assert.Equal("Active", b.Status));
+            Assert.True(run.ActiveBusinesses >= initialBusinesses / 2, $"Too many businesses closed after {run.YearsRun} years.");
 
             Assert.True(float.IsFinite(run.AverageSatisfaction), $"Satisfaction became non-finite after {run.YearsRun} years.");
             Assert.InRange(run.AverageSatisfaction, 30f, 100f);

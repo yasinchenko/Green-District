@@ -167,9 +167,9 @@ public class MapGridTests
         var shop = catalog.CreateObject("shop-1", "shop", 1, new GridPosition(12, 3));
         var clinic = catalog.CreateObject("clinic-1", "clinic", 1, new GridPosition(28, 3));
 
-        Assert.Equal((8, 10), (smallHouse.WidthMeters, smallHouse.LengthMeters));
-        Assert.Equal((12, 16), (shop.WidthMeters, shop.LengthMeters));
-        Assert.Equal((20, 28), (clinic.WidthMeters, clinic.LengthMeters));
+        Assert.Equal((4, 5), (smallHouse.WidthMeters, smallHouse.LengthMeters));
+        Assert.Equal((6, 8), (shop.WidthMeters, shop.LengthMeters));
+        Assert.Equal((10, 14), (clinic.WidthMeters, clinic.LengthMeters));
         Assert.Equal("service.clinic", clinic.AssetKey);
     }
 
@@ -222,10 +222,10 @@ public class MapGridTests
             new GridPosition(5, 5),
             rotationDegrees: 90);
 
-        Assert.Equal(18, workshop.WidthMeters);
-        Assert.Equal(24, workshop.LengthMeters);
-        Assert.Equal(24, workshop.FootprintWidth);
-        Assert.Equal(18, workshop.FootprintLength);
+        Assert.Equal(9, workshop.WidthMeters);
+        Assert.Equal(12, workshop.LengthMeters);
+        Assert.Equal(12, workshop.FootprintWidth);
+        Assert.Equal(9, workshop.FootprintLength);
     }
 
     [Fact]

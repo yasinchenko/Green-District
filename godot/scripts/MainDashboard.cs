@@ -7,6 +7,7 @@ using System.Text.Json;
 using GreenDistrict.Simulation.Core;
 using GreenDistrict.Simulation.Economy;
 using GreenDistrict.Simulation.Localization;
+using GreenDistrict.Simulation.Map;
 using Godot;
 
 namespace GreenDistrict.Godot.Scripts;
@@ -32,7 +33,9 @@ public partial class MainDashboard : Control
     private double _autoTickAccumulator;
     private int? _selectedDistrictId;
     private int? _selectedEventId;
+    private string? _selectedMapObjectId;
     private string? _projectMessage;
+    private int? _projectMessageProjectId;
     private string? _eventMessage;
     private string? _systemMessage;
     private MainUiState _uiState = MainUiState.MainMenu;
@@ -60,7 +63,12 @@ public partial class MainDashboard : Control
     private VBoxContainer _contextList = null!;
     private VBoxContainer _projectList = null!;
     private VBoxContainer _diagnosticsList = null!;
+    private string? _projectPanelKey;
     private bool _compactLayout;
+    private Control? _loadingOverlay;
+    private Label? _loadingSpinnerLabel;
+    private double _loadingSpinnerAccumulator;
+    private int _loadingSpinnerFrame;
 
     public override void _Ready()
     {
@@ -88,6 +96,7 @@ public partial class MainDashboard : Control
 
     public override void _Process(double delta)
     {
+        UpdateLoadingIndicator(delta);
         if (!_isRunning) return;
 
         _autoTickAccumulator += delta * _ticksPerSecond;
@@ -432,7 +441,32 @@ public partial class MainDashboard : Control
         _districtMap.SetAnchorsPreset(LayoutPreset.FullRect);
         _districtMap.DistrictSelected += districtId =>
         {
+            if (IsSingleCityMode(_bridge.World))
+            {
+                _selectedDistrictId = null;
+                _selectedEventId = null;
+                _selectedMapObjectId = null;
+                _eventMessage = null;
+                _contextPanelMode = ContextPanelMode.Overview;
+                _isContextPanelOpen = true;
+                BuildInterface();
+                Refresh();
+                return;
+            }
+
             _selectedDistrictId = districtId;
+            _selectedEventId = null;
+            _selectedMapObjectId = null;
+            _eventMessage = null;
+            _contextPanelMode = ContextPanelMode.Overview;
+            _isContextPanelOpen = true;
+            BuildInterface();
+            Refresh();
+        };
+        _districtMap.MapObjectSelected += objectId =>
+        {
+            _selectedMapObjectId = string.IsNullOrWhiteSpace(objectId) ? null : objectId;
+            _selectedDistrictId = null;
             _selectedEventId = null;
             _eventMessage = null;
             _contextPanelMode = ContextPanelMode.Overview;
@@ -508,6 +542,7 @@ public partial class MainDashboard : Control
         _contextList = CreateTabList(_tabs, T("ui.overview"));
         _projectList = CreateTabList(_tabs, T("ui.projects"));
         _diagnosticsList = CreateTabList(_tabs, T("ui.diagnostics_short"));
+        _projectPanelKey = null;
         _tabs.CurrentTab = (int)_contextPanelMode;
     }
 
@@ -652,7 +687,9 @@ public partial class MainDashboard : Control
         _autoTickAccumulator = 0;
         _selectedDistrictId = null;
         _selectedEventId = null;
+        _selectedMapObjectId = null;
         _projectMessage = null;
+        _projectMessageProjectId = null;
         _eventMessage = null;
         _systemMessage = null;
         _previousAnalytics = null;
@@ -666,11 +703,13 @@ public partial class MainDashboard : Control
         _autoTickAccumulator = 0;
         _selectedDistrictId = null;
         _selectedEventId = null;
+        _selectedMapObjectId = null;
         _projectMessage = null;
+        _projectMessageProjectId = null;
         _eventMessage = null;
         _systemMessage = null;
         _previousAnalytics = null;
-        _bridge.ResetWorld();
+        _bridge.ResetWorld(Random.Shared.Next(1, int.MaxValue));
         _hasActiveGame = true;
         _uiState = MainUiState.InGame;
         BuildInterface();
@@ -688,9 +727,16 @@ public partial class MainDashboard : Control
     {
         _wasRunningBeforeMenu = _isRunning;
         _isRunning = false;
+        ShowLoadingOverlay(T("ui.loading_menu"));
+        CallDeferred(nameof(CompleteOpenPausedMenu));
+    }
+
+    private void CompleteOpenPausedMenu()
+    {
         _uiState = MainUiState.PausedMenu;
         BuildInterface();
         Refresh();
+        HideLoadingOverlay();
     }
 
     private void ResumeGame()
@@ -717,6 +763,84 @@ public partial class MainDashboard : Control
 
         _uiState = MainUiState.Settings;
         BuildInterface();
+    }
+
+    private void ShowLoadingOverlay(string text)
+    {
+        HideLoadingOverlay();
+
+        var overlay = new PanelContainer
+        {
+            MouseFilter = MouseFilterEnum.Stop
+        };
+        overlay.SetAnchorsPreset(LayoutPreset.FullRect);
+        overlay.AddThemeStyleboxOverride(
+            "panel",
+            UiTheme.PanelStyle(new Color(UiTheme.Text, 0.24f), new Color(UiTheme.Text, 0f), 0, 0));
+        AddChild(overlay);
+        overlay.MoveToFront();
+
+        var center = new CenterContainer
+        {
+            MouseFilter = MouseFilterEnum.Ignore
+        };
+        center.SetAnchorsPreset(LayoutPreset.FullRect);
+        overlay.AddChild(center);
+
+        var panel = CreatePanel(UiTheme.Panel);
+        panel.CustomMinimumSize = new Vector2(220, 96);
+        center.AddChild(panel);
+
+        var rows = new VBoxContainer
+        {
+            Alignment = BoxContainer.AlignmentMode.Center,
+            MouseFilter = MouseFilterEnum.Ignore
+        };
+        rows.AddThemeConstantOverride("separation", 8);
+        panel.AddChild(rows);
+
+        _loadingSpinnerLabel = new Label
+        {
+            Text = "|",
+            HorizontalAlignment = HorizontalAlignment.Center
+        };
+        UiTheme.ApplyLabel(_loadingSpinnerLabel, 24, UiTheme.Info);
+        rows.AddChild(_loadingSpinnerLabel);
+
+        var label = new Label
+        {
+            Text = text,
+            HorizontalAlignment = HorizontalAlignment.Center
+        };
+        UiTheme.ApplyLabel(label, 14, UiTheme.Text);
+        rows.AddChild(label);
+
+        _loadingSpinnerAccumulator = 0;
+        _loadingSpinnerFrame = 0;
+        _loadingOverlay = overlay;
+    }
+
+    private void HideLoadingOverlay()
+    {
+        _loadingSpinnerLabel = null;
+        if (_loadingOverlay == null) return;
+
+        RemoveChild(_loadingOverlay);
+        _loadingOverlay.QueueFree();
+        _loadingOverlay = null;
+    }
+
+    private void UpdateLoadingIndicator(double delta)
+    {
+        if (_loadingSpinnerLabel == null) return;
+
+        _loadingSpinnerAccumulator += delta;
+        if (_loadingSpinnerAccumulator < 0.10) return;
+
+        _loadingSpinnerAccumulator = 0;
+        var frames = new[] { "|", "/", "-", "\\" };
+        _loadingSpinnerFrame = (_loadingSpinnerFrame + 1) % frames.Length;
+        _loadingSpinnerLabel.Text = frames[_loadingSpinnerFrame];
     }
 
     private void SaveGameFromMenu()
@@ -753,16 +877,28 @@ public partial class MainDashboard : Control
 
         RefreshRunState();
         _districtMap.SetWorld(world);
+        if (!string.IsNullOrWhiteSpace(_selectedMapObjectId) && _districtMap.GetMapObject(_selectedMapObjectId) == null)
+        {
+            _selectedMapObjectId = null;
+        }
+
         _districtMap.SetSelectedDistrict(_selectedDistrictId);
         _districtMap.SetSelectedEvent(_selectedEventId);
+        _districtMap.SetSelectedMapObject(_selectedMapObjectId);
+        SyncProjectMessage(world);
         RebuildContext(world);
-        RebuildProjects(world);
+        RebuildProjectsIfNeeded(world);
         RebuildDiagnostics(world);
     }
 
     private void NormalizeSelection(WorldState world)
     {
         if (_selectedDistrictId.HasValue && world.Districts.All(district => district.Id != _selectedDistrictId.Value))
+        {
+            _selectedDistrictId = null;
+        }
+
+        if (IsSingleCityMode(world))
         {
             _selectedDistrictId = null;
         }
@@ -831,6 +967,7 @@ public partial class MainDashboard : Control
         var selectedEvent = _selectedEventId.HasValue
             ? world.Events.FirstOrDefault(e => e.Id == _selectedEventId.Value)
             : null;
+        var selectedMapObject = _districtMap.GetMapObject(_selectedMapObjectId);
 
         if (selectedEvent != null)
         {
@@ -838,16 +975,33 @@ public partial class MainDashboard : Control
             return;
         }
 
+        if (selectedMapObject != null)
+        {
+            RebuildMapObjectDetails(world, selectedMapObject);
+            return;
+        }
+
         if (selectedDistrict == null)
         {
+            var cityDistrict = SingleCityDistrict(world);
             AddPanelRows(_contextList, T("ui.city_status"), "I")
-                .AddChild(CreateWrappedLabel(T("ui.no_district_selected")));
+                .AddChild(CreateWrappedLabel(
+                    cityDistrict == null ? T("ui.city_context_hint") : cityDistrict.Name,
+                    UiTheme.TextMuted));
             var rows = AddPanelRows(_contextList, T("ui.overview"), "O");
             rows.AddChild(CreateStatRow(T("ui.population"), world.GetTotalPopulation().ToString(CultureInfo.InvariantCulture)));
             rows.AddChild(CreateStatRow(T("ui.budget"), FormatMoney(world.Budget)));
             rows.AddChild(CreateStatRow(T("ui.support"), FormatPercent(world.SupportRating)));
             rows.AddChild(CreateStatRow(T("ui.satisfaction"), FormatPercent(world.GetAverageSatisfaction())));
             rows.AddChild(CreateStatRow(T("ui.unemployment"), FormatPercent(world.LastUnemploymentRate)));
+            if (cityDistrict != null)
+            {
+                rows.AddChild(CreateStatRow(T("ui.safety"), FormatPercent(cityDistrict.AverageSafetySatisfaction)));
+                rows.AddChild(CreateStatRow(T("ui.housing"), $"{cityDistrict.OccupiedHousing}/{cityDistrict.HousingCapacity}"));
+                rows.AddChild(CreateStatRow(T("ui.jobs"), $"{cityDistrict.TotalJobs - cityDistrict.OpenJobs}/{cityDistrict.TotalJobs}"));
+                rows.AddChild(CreateStatRow(T("ui.services"), FormatPercent(cityDistrict.ServiceLevel)));
+                rows.AddChild(CreateStatRow(T("ui.crisis"), FormatPercent(cityDistrict.CrisisRisk), cityDistrict.CrisisRisk > 60f ? UiTheme.Danger : UiTheme.Text));
+            }
             rows.AddChild(CreateStatRow(T("ui.active_projects"), world.Projects.Count(p => !p.Completed).ToString(CultureInfo.InvariantCulture)));
             rows.AddChild(CreateStatRow(T("ui.complete_projects"), world.Projects.Count(p => p.Completed).ToString(CultureInfo.InvariantCulture)));
             AddCityIssueCards(_contextList, world);
@@ -887,22 +1041,122 @@ public partial class MainDashboard : Control
         }
     }
 
+    private void RebuildMapObjectDetails(WorldState world, PlacedMapObject mapObject)
+    {
+        var rows = AddPanelRows(_contextList, MapObjectTitle(world, mapObject), MapObjectIcon(world, mapObject));
+        rows.AddChild(CreateButton(T("ui.back"), ClearSelection, 112, T("ui.back")));
+        rows.AddChild(CreateStatRow(T("ui.object_type"), MapObjectTypeLabel(mapObject)));
+        rows.AddChild(CreateStatRow(T("ui.object_size"), $"{mapObject.FootprintWidth} x {mapObject.FootprintLength}"));
+        rows.AddChild(CreateStatRow(T("ui.object_position"), $"{mapObject.Position.X}, {mapObject.Position.Y}"));
+        rows.AddChild(CreateStatRow(T("ui.object_status"), MapObjectStatusText(world, mapObject), MapObjectStatusColor(world, mapObject)));
+
+        switch (mapObject.EntityKind)
+        {
+            case MapObjectEntityKind.Business:
+                AddBusinessObjectDetails(rows, world.Businesses.FirstOrDefault(business => business.Id == mapObject.EntityId));
+                break;
+            case MapObjectEntityKind.HousingUnit:
+                AddHousingObjectDetails(rows, world.HousingUnits.FirstOrDefault(housing => housing.Id == mapObject.EntityId));
+                break;
+            case MapObjectEntityKind.GovernmentProject:
+                AddProjectObjectDetails(rows, world.Projects.FirstOrDefault(project => project.Id == mapObject.EntityId));
+                break;
+            case MapObjectEntityKind.GameEvent:
+                AddEventObjectDetails(rows, world.Events.FirstOrDefault(gameEvent => gameEvent.Id == mapObject.EntityId));
+                break;
+        }
+
+        var eventRows = AddPanelRows(_contextList, T("ui.object_events"), "!");
+        var localEvents = MapObjectLocalEvents(world, mapObject).ToList();
+        if (localEvents.Count == 0)
+        {
+            eventRows.AddChild(CreateWrappedLabel(T("ui.no_object_events"), UiTheme.TextMuted));
+        }
+        else
+        {
+            foreach (var gameEvent in localEvents)
+            {
+                eventRows.AddChild(CreateEventCard(world, gameEvent, compact: true));
+            }
+        }
+    }
+
+    private void AddBusinessObjectDetails(Container rows, Business? business)
+    {
+        if (business == null) return;
+
+        rows.AddChild(CreateStatRow(T("ui.staff"), $"{business.EmployeeIds.Count}/{business.MaxEmployees}"));
+        rows.AddChild(CreateStatRow(T("ui.business_cash"), FormatMoney(business.Cash)));
+        rows.AddChild(CreateStatRow(T("ui.business_output"), business.BaseOutput.ToString("F0", CultureInfo.InvariantCulture)));
+        rows.AddChild(CreateStatRow(T("ui.business_product"), string.IsNullOrWhiteSpace(business.ProductionType) ? "-" : business.ProductionType));
+    }
+
+    private void AddHousingObjectDetails(Container rows, HousingUnit? housing)
+    {
+        if (housing == null) return;
+
+        rows.AddChild(CreateStatRow(T("ui.capacity"), housing.Capacity.ToString(CultureInfo.InvariantCulture)));
+        rows.AddChild(CreateStatRow(T("ui.occupied"), housing.IsOccupied ? T("ui.yes") : T("ui.no")));
+        rows.AddChild(CreateStatRow(T("ui.rent"), FormatMoney(housing.RentPerTick)));
+    }
+
+    private void AddProjectObjectDetails(Container rows, GovernmentProject? project)
+    {
+        if (project == null) return;
+
+        rows.AddChild(CreateStatRow(T("ui.project"), ProjectTypeLabel(project.Type)));
+        rows.AddChild(CreateStatRow(T("ui.time"), project.Completed ? T("ui.complete") : FormatDurationTicks(project.RemainingTicks)));
+        if (!project.Completed)
+        {
+            var progress = project.DurationTicks <= 0
+                ? 100f
+                : Math.Clamp((project.DurationTicks - project.RemainingTicks) / (float)project.DurationTicks * 100f, 0f, 100f);
+            rows.AddChild(CreateStatRow(T("ui.progress"), FormatPercent(progress)));
+        }
+    }
+
+    private void AddEventObjectDetails(Container rows, GameEvent? gameEvent)
+    {
+        if (gameEvent == null) return;
+
+        rows.AddChild(CreateStatRow(T("ui.event_type"), gameEvent.Type.ToString(), EventColor(gameEvent)));
+        rows.AddChild(CreateWrappedLabel(gameEvent.Description, UiTheme.TextMuted));
+        rows.AddChild(CreateButton(T("ui.event_details"), () =>
+        {
+            _selectedEventId = gameEvent.Id;
+            _selectedMapObjectId = null;
+            _eventMessage = null;
+            Refresh();
+        }, 132, T("ui.event_details")));
+    }
+
+    private static IEnumerable<GameEvent> MapObjectLocalEvents(WorldState world, PlacedMapObject mapObject)
+    {
+        return world.Events
+            .Where(gameEvent =>
+                !gameEvent.IsResolved &&
+                gameEvent.TargetEntityKind == mapObject.EntityKind &&
+                gameEvent.TargetEntityId == mapObject.EntityId)
+            .OrderByDescending(gameEvent => gameEvent.CreatedAtTick);
+    }
+
     private void RebuildProjects(WorldState world)
     {
         ClearChildren(_projectList);
 
         var intro = AddPanelRows(_projectList, T("ui.quick_actions"), "A");
-        intro.AddChild(CreateWrappedLabel(_selectedDistrictId.HasValue ? DistrictName(world, _selectedDistrictId.Value) : T("ui.city_wide"), UiTheme.TextMuted));
+        var projectDistrictId = ProjectTargetDistrictId(world);
+        intro.AddChild(CreateWrappedLabel(IsSingleCityMode(world) || !projectDistrictId.HasValue ? T("ui.city_wide") : DistrictName(world, projectDistrictId.Value), UiTheme.TextMuted));
         _projectActionLabel = CreateWrappedLabel(_projectMessage ?? T("ui.choose_project"));
         intro.AddChild(_projectActionLabel);
 
         foreach (var type in Enum.GetValues<ProjectType>().Where(t => t != ProjectType.Custom))
         {
-            var project = GovernmentProject.CreateTyped(type, _selectedDistrictId);
+            var project = GovernmentProject.CreateTyped(type, projectDistrictId);
             var rows = AddPanelRows(_projectList, ProjectTypeLabel(type), ProjectIcon(type));
             rows.AddChild(CreateStatRow(T("ui.project_upfront_cost"), FormatMoney(project.Cost)));
             rows.AddChild(CreateStatRow(T("ui.project_ongoing_cost"), FormatMoney(_bridge.World.ProjectOperatingExpensePerTick)));
-            rows.AddChild(CreateStatRow(T("ui.time"), project.DurationTicks.ToString(CultureInfo.InvariantCulture)));
+            rows.AddChild(CreateStatRow(T("ui.time"), FormatDurationTicks(project.DurationTicks)));
             rows.AddChild(CreateWrappedLabel(Tf(
                 "ui.effects_summary",
                 FormatSigned(project.SupportEffect),
@@ -915,9 +1169,40 @@ public partial class MainDashboard : Control
         }
     }
 
+    private void RebuildProjectsIfNeeded(WorldState world)
+    {
+        var nextKey = BuildProjectPanelKey(world);
+        if (_projectPanelKey == nextKey) return;
+
+        _projectPanelKey = nextKey;
+        RebuildProjects(world);
+    }
+
+    private string BuildProjectPanelKey(WorldState world)
+    {
+        var affordability = string.Join(
+            ",",
+            Enum.GetValues<ProjectType>()
+                .Where(type => type != ProjectType.Custom)
+                .Select(type =>
+                {
+                    var project = GovernmentProject.CreateTyped(type, ProjectTargetDistrictId(world));
+                    return world.Budget >= project.Cost ? "1" : "0";
+                }));
+
+        return string.Join(
+            "|",
+            _settings.Language,
+            ProjectTargetDistrictId(world)?.ToString(CultureInfo.InvariantCulture) ?? "city",
+            _projectMessage ?? string.Empty,
+            world.ProjectOperatingExpensePerTick.ToString("F2", CultureInfo.InvariantCulture),
+            affordability);
+    }
+
     private void RebuildEventDetails(WorldState world, GameEvent gameEvent)
     {
         var rows = AddPanelRows(_contextList, T("ui.event_details"), EventIcon(gameEvent));
+        rows.AddChild(CreateButton(T("ui.back"), ReturnFromEventDetails, 112, T("ui.back")));
         rows.AddChild(CreateWrappedLabel(gameEvent.Title));
         rows.AddChild(CreateWrappedLabel(gameEvent.Description, UiTheme.TextMuted));
         rows.AddChild(CreateStatRow(T("ui.time"), gameEvent.CreatedAtTick.ToString(CultureInfo.InvariantCulture)));
@@ -1142,12 +1427,32 @@ public partial class MainDashboard : Control
 
     private void StartProject(ProjectType type)
     {
-        var project = GovernmentProject.CreateTyped(type, _selectedDistrictId);
-        var started = _bridge.StartProject(type, _selectedDistrictId);
-        _projectMessage = started
+        var districtId = ProjectTargetDistrictId(_bridge.World);
+        var project = GovernmentProject.CreateTyped(type, districtId);
+        var startedProject = _bridge.StartProject(type, districtId);
+        _projectMessageProjectId = startedProject?.Id;
+        _projectMessage = startedProject != null
             ? Tf("ui.started_project", project.Name, FormatMoney(project.Cost))
             : Tf("ui.not_enough_budget", project.Name, FormatMoney(project.Cost));
         Refresh();
+    }
+
+    private void SyncProjectMessage(WorldState world)
+    {
+        if (!_projectMessageProjectId.HasValue) return;
+
+        var project = world.Projects.FirstOrDefault(p => p.Id == _projectMessageProjectId.Value);
+        if (project == null)
+        {
+            _projectMessageProjectId = null;
+            _projectMessage = null;
+            return;
+        }
+
+        if (!project.Completed) return;
+
+        _projectMessageProjectId = null;
+        _projectMessage = Tf("ui.project_completed_message", project.Name);
     }
 
     private void SaveWorld()
@@ -1178,7 +1483,9 @@ public partial class MainDashboard : Control
                 _autoTickAccumulator = 0;
                 _selectedDistrictId = null;
                 _selectedEventId = null;
+                _selectedMapObjectId = null;
                 _projectMessage = null;
+                _projectMessageProjectId = null;
                 _eventMessage = null;
                 _systemMessage = Tf("ui.load_success", path);
                 _previousAnalytics = null;
@@ -1219,6 +1526,14 @@ public partial class MainDashboard : Control
     private void ClearSelection()
     {
         _selectedDistrictId = null;
+        _selectedEventId = null;
+        _selectedMapObjectId = null;
+        _eventMessage = null;
+        Refresh();
+    }
+
+    private void ReturnFromEventDetails()
+    {
         _selectedEventId = null;
         _eventMessage = null;
         Refresh();
@@ -1271,10 +1586,26 @@ public partial class MainDashboard : Control
         return File.Exists(SavePath());
     }
 
+    private static bool IsSingleCityMode(WorldState world)
+    {
+        return world.Districts.Count == 1;
+    }
+
+    private static District? SingleCityDistrict(WorldState world)
+    {
+        return IsSingleCityMode(world) ? world.Districts[0] : null;
+    }
+
+    private int? ProjectTargetDistrictId(WorldState world)
+    {
+        return SingleCityDistrict(world)?.Id ?? _selectedDistrictId;
+    }
+
     private void AddCityIssueCards(Container parent, WorldState world)
     {
         var issues = AddPanelRows(parent, T("ui.priorities"), "!");
         var added = false;
+        var cityDistrict = SingleCityDistrict(world);
 
         if (world.Budget < 2000f)
         {
@@ -1297,6 +1628,30 @@ public partial class MainDashboard : Control
         if (world.LastUnemploymentRate > 15f)
         {
             issues.AddChild(CreateIssueCard(T("ui.issue.unemployment"), T("ui.issue.unemployment_hint"), UiTheme.Danger, "J"));
+            added = true;
+        }
+
+        if (cityDistrict is { CrisisRisk: >= 35f } || cityDistrict is { HasActiveCrisis: true })
+        {
+            issues.AddChild(CreateIssueCard(T("ui.issue.crisis_risk"), T("ui.issue.crisis_risk_hint"), UiTheme.Danger, "!"));
+            added = true;
+        }
+
+        if (cityDistrict is { AvailableHousing: <= 0 })
+        {
+            issues.AddChild(CreateIssueCard(T("ui.issue.housing_shortage"), T("ui.issue.housing_shortage_hint"), UiTheme.Warning, "H"));
+            added = true;
+        }
+
+        if (cityDistrict is { AverageSafetySatisfaction: < 60f })
+        {
+            issues.AddChild(CreateIssueCard(T("ui.issue.low_safety"), T("ui.issue.low_safety_hint"), UiTheme.Danger, "S"));
+            added = true;
+        }
+
+        if (cityDistrict is { ServiceLevel: < 60f })
+        {
+            issues.AddChild(CreateIssueCard(T("ui.issue.low_services"), T("ui.issue.low_services_hint"), UiTheme.Warning, "V"));
             added = true;
         }
 
@@ -1431,7 +1786,8 @@ public partial class MainDashboard : Control
             if (input is InputEventMouseButton { Pressed: true, ButtonIndex: MouseButton.Left })
             {
                 _selectedEventId = gameEvent.Id;
-                _selectedDistrictId = EventDistrictId(gameEvent) ?? _selectedDistrictId;
+                _selectedMapObjectId = null;
+                _selectedDistrictId = IsSingleCityMode(world) ? null : EventDistrictId(gameEvent) ?? _selectedDistrictId;
                 _eventMessage = null;
                 Refresh();
             }
@@ -1711,7 +2067,7 @@ public partial class MainDashboard : Control
         rows.AddChild(progress);
 
         var percent = done / (float)total * 100f;
-        rows.AddChild(CreateWrappedLabel($"{done}/{total} ticks · {percent:F0}%", UiTheme.TextMuted));
+        rows.AddChild(CreateWrappedLabel($"{FormatDurationTicks(project.RemainingTicks)} · {percent:F0}%", UiTheme.TextMuted));
         return rows;
     }
 
@@ -1751,6 +2107,37 @@ public partial class MainDashboard : Control
     private static string FormatPercent(float value)
     {
         return value.ToString("F1", CultureInfo.InvariantCulture) + "%";
+    }
+
+    private string FormatDurationTicks(int ticks)
+    {
+        var remaining = Math.Max(0, ticks);
+        var days = remaining / 1440;
+        var hours = remaining % 1440 / 60;
+        var minutes = remaining % 60;
+        var isRu = _settings.Language == GameLanguage.Russian;
+
+        if (days > 0 && hours > 0)
+        {
+            return isRu ? $"{days} д {hours} ч" : $"{days}d {hours}h";
+        }
+
+        if (days > 0)
+        {
+            return isRu ? $"{days} д" : $"{days}d";
+        }
+
+        if (hours > 0 && minutes > 0)
+        {
+            return isRu ? $"{hours} ч {minutes} м" : $"{hours}h {minutes}m";
+        }
+
+        if (hours > 0)
+        {
+            return isRu ? $"{hours} ч" : $"{hours}h";
+        }
+
+        return isRu ? $"{minutes} м" : $"{minutes}m";
     }
 
     private void LoadLocalizationDictionaries()
@@ -1979,6 +2366,85 @@ public partial class MainDashboard : Control
         return gameEvent.Choices
             .Select(choice => choice.DistrictId)
             .FirstOrDefault(districtId => districtId.HasValue);
+    }
+
+    private string MapObjectTitle(WorldState world, PlacedMapObject mapObject)
+    {
+        return mapObject.EntityKind switch
+        {
+            MapObjectEntityKind.Business => world.Businesses.FirstOrDefault(business => business.Id == mapObject.EntityId)?.Name ?? T("ui.object_business"),
+            MapObjectEntityKind.HousingUnit => $"{T("ui.object_housing")} #{mapObject.EntityId?.ToString(CultureInfo.InvariantCulture) ?? mapObject.Id}",
+            MapObjectEntityKind.GovernmentProject => world.Projects.FirstOrDefault(project => project.Id == mapObject.EntityId)?.Name ?? T("ui.object_project"),
+            MapObjectEntityKind.GameEvent => world.Events.FirstOrDefault(gameEvent => gameEvent.Id == mapObject.EntityId)?.Title ?? T("ui.object_event"),
+            _ => mapObject.AssetKey
+        };
+    }
+
+    private string MapObjectIcon(WorldState world, PlacedMapObject mapObject)
+    {
+        return mapObject.EntityKind switch
+        {
+            MapObjectEntityKind.Business => "$",
+            MapObjectEntityKind.HousingUnit => "H",
+            MapObjectEntityKind.GovernmentProject => world.Projects.FirstOrDefault(project => project.Id == mapObject.EntityId) is { } project
+                ? ProjectIcon(project.Type)
+                : "P",
+            MapObjectEntityKind.GameEvent => world.Events.FirstOrDefault(gameEvent => gameEvent.Id == mapObject.EntityId) is { } gameEvent
+                ? EventIcon(gameEvent)
+                : "!",
+            _ => mapObject.Type == PlacedMapObjectType.Park ? "G" : "B"
+        };
+    }
+
+    private string MapObjectTypeLabel(PlacedMapObject mapObject)
+    {
+        return mapObject.Type switch
+        {
+            PlacedMapObjectType.Business => T("ui.object_business"),
+            PlacedMapObjectType.Housing => T("ui.object_housing"),
+            PlacedMapObjectType.GovernmentProject => T("ui.object_project"),
+            PlacedMapObjectType.Service => T("ui.object_service"),
+            PlacedMapObjectType.Park => T("ui.object_park"),
+            PlacedMapObjectType.Marker => T("ui.object_event"),
+            _ => T("ui.object_building")
+        };
+    }
+
+    private string MapObjectStatusText(WorldState world, PlacedMapObject mapObject)
+    {
+        return mapObject.EntityKind switch
+        {
+            MapObjectEntityKind.Business => world.Businesses.FirstOrDefault(business => business.Id == mapObject.EntityId) is { } business
+                ? BusinessStatusLabel(business.Status)
+                : "-",
+            MapObjectEntityKind.HousingUnit => world.HousingUnits.FirstOrDefault(housing => housing.Id == mapObject.EntityId) is { } housing
+                ? housing.IsOccupied ? T("ui.occupied") : T("ui.available")
+                : "-",
+            MapObjectEntityKind.GovernmentProject => world.Projects.FirstOrDefault(project => project.Id == mapObject.EntityId) is { } project
+                ? project.Completed ? T("ui.completed") : T("ui.in_progress")
+                : "-",
+            MapObjectEntityKind.GameEvent => world.Events.FirstOrDefault(gameEvent => gameEvent.Id == mapObject.EntityId) is { } gameEvent
+                ? gameEvent.IsResolved ? T("ui.event_resolved") : T("ui.event_unresolved")
+                : "-",
+            _ => T("ui.available")
+        };
+    }
+
+    private static Color MapObjectStatusColor(WorldState world, PlacedMapObject mapObject)
+    {
+        return mapObject.EntityKind switch
+        {
+            MapObjectEntityKind.Business => world.Businesses.FirstOrDefault(business => business.Id == mapObject.EntityId) is { Status: BusinessStatus.Active }
+                ? UiTheme.Success
+                : UiTheme.Warning,
+            MapObjectEntityKind.GameEvent => world.Events.FirstOrDefault(gameEvent => gameEvent.Id == mapObject.EntityId) is { IsResolved: false }
+                ? UiTheme.Warning
+                : UiTheme.Success,
+            MapObjectEntityKind.GovernmentProject => world.Projects.FirstOrDefault(project => project.Id == mapObject.EntityId) is { Completed: false }
+                ? UiTheme.Info
+                : UiTheme.Success,
+            _ => UiTheme.Text
+        };
     }
 
     private string ChoiceEffectsText(EventChoice choice)

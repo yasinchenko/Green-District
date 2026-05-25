@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using GreenDistrict.Simulation.Core;
+using GreenDistrict.Simulation.Map;
 
 namespace GreenDistrict.Simulation.Persistence;
 
@@ -264,7 +265,11 @@ public static class WorldStateSerializer
             {
                 CreatedAtTick = eventSave.CreatedAtTick,
                 IsResolved = eventSave.IsResolved,
-                SelectedChoiceId = eventSave.SelectedChoiceId
+                SelectedChoiceId = eventSave.SelectedChoiceId,
+                TargetEntityKind = eventSave.TargetEntityKind,
+                TargetEntityId = eventSave.TargetEntityId,
+                LocalBuildingEventKind = eventSave.LocalBuildingEventKind,
+                Severity = eventSave.Severity
             };
             gameEvent.Choices.AddRange(eventSave.Choices.Select(ToChoice));
             world.Events.Add(gameEvent);
@@ -437,6 +442,10 @@ public static class WorldStateSerializer
         Type = gameEvent.Type,
         IsResolved = gameEvent.IsResolved,
         SelectedChoiceId = gameEvent.SelectedChoiceId,
+        TargetEntityKind = gameEvent.TargetEntityKind,
+        TargetEntityId = gameEvent.TargetEntityId,
+        LocalBuildingEventKind = gameEvent.LocalBuildingEventKind,
+        Severity = gameEvent.Severity,
         Choices = gameEvent.Choices.Select(ToSave).ToList()
     };
 
@@ -657,6 +666,10 @@ public class EventSave
     public EventType Type { get; set; }
     public bool IsResolved { get; set; }
     public string? SelectedChoiceId { get; set; }
+    public MapObjectEntityKind TargetEntityKind { get; set; } = MapObjectEntityKind.None;
+    public int? TargetEntityId { get; set; }
+    public LocalBuildingEventKind? LocalBuildingEventKind { get; set; }
+    public float Severity { get; set; }
     public List<EventChoiceSave> Choices { get; set; } = new();
 }
 

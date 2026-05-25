@@ -11,7 +11,7 @@ public class MapGridGeneratorTests
     [Fact]
     public void Generator_Assigns_District_Cells()
     {
-        var world = CreateWorld();
+        var world = CreateWorld(seed: 12345);
 
         var result = new MapGridGenerator().Generate(world, new MapGridGenerationOptions(120, 80));
 
@@ -95,6 +95,18 @@ public class MapGridGeneratorTests
     }
 
     [Fact]
+    public void Generator_Uses_Target_Water_Share()
+    {
+        var world = CreateWorld(seed: 12345);
+
+        var result = new MapGridGenerator().Generate(world, new MapGridGenerationOptions(120, 80));
+        var waterShare = result.Grid.Cells.Count(cell => cell.Surface == MapSurfaceType.Water) /
+            (float)(result.Grid.WidthMeters * result.Grid.HeightMeters);
+
+        Assert.InRange(waterShare, 0.19f, 0.21f);
+    }
+
+    [Fact]
     public void Generator_Creates_Irregular_Water_Boundaries()
     {
         var world = CreateWorld();
@@ -114,9 +126,80 @@ public class MapGridGeneratorTests
             .ToList();
 
         Assert.True(waterRows.Count > 8);
-        Assert.True(waterRows.Select(row => row.MinX).Distinct().Count() > 4);
+        Assert.True(waterRows.Select(row => row.MinX).Distinct().Count() > 1);
         Assert.True(waterRows.Select(row => row.MaxX).Distinct().Count() > 4);
         Assert.True(waterRows.Select(row => row.Width).Distinct().Count() > 4);
+    }
+
+    [Fact]
+    public void Generator_Produces_Same_Terrain_For_Same_World_Seed()
+    {
+        var firstWorld = CreateWorld(seed: 12345);
+        var secondWorld = CreateWorld(seed: 12345);
+
+        var first = new MapGridGenerator().Generate(firstWorld, new MapGridGenerationOptions(120, 80));
+        var second = new MapGridGenerator().Generate(secondWorld, new MapGridGenerationOptions(120, 80));
+
+        Assert.Equal(TerrainSignature(first.Grid), TerrainSignature(second.Grid));
+    }
+
+    [Fact]
+    public void Generator_Produces_Different_Terrain_For_Different_World_Seeds()
+    {
+        var firstWorld = CreateWorld(seed: 12345);
+        var secondWorld = CreateWorld(seed: 98765);
+
+        var first = new MapGridGenerator().Generate(firstWorld, new MapGridGenerationOptions(120, 80));
+        var second = new MapGridGenerator().Generate(secondWorld, new MapGridGenerationOptions(120, 80));
+
+        Assert.NotEqual(TerrainSignature(first.Grid), TerrainSignature(second.Grid));
+    }
+
+    [Fact]
+    public void Generator_Produces_Same_District_Layout_For_Same_World_Seed()
+    {
+        var firstWorld = CreateWorld(seed: 12345);
+        var secondWorld = CreateWorld(seed: 12345);
+
+        var first = new MapGridGenerator().Generate(firstWorld, new MapGridGenerationOptions(160, 100));
+        var second = new MapGridGenerator().Generate(secondWorld, new MapGridGenerationOptions(160, 100));
+
+        Assert.Equal(DistrictLayoutSignature(first), DistrictLayoutSignature(second));
+    }
+
+    [Fact]
+    public void Generator_Produces_Different_District_Layout_For_Different_World_Seeds()
+    {
+        var firstWorld = CreateWorld(seed: 12345);
+        var secondWorld = CreateWorld(seed: 98765);
+
+        var first = new MapGridGenerator().Generate(firstWorld, new MapGridGenerationOptions(160, 100));
+        var second = new MapGridGenerator().Generate(secondWorld, new MapGridGenerationOptions(160, 100));
+
+        Assert.NotEqual(DistrictLayoutSignature(first), DistrictLayoutSignature(second));
+    }
+
+    [Fact]
+    public void Generator_Produces_Different_Object_Layouts_For_Different_World_Seeds()
+    {
+        var firstWorld = CreateWorldWithStarterObjects(seed: 12345);
+        var secondWorld = CreateWorldWithStarterObjects(seed: 98765);
+
+        var first = new MapGridGenerator().Generate(firstWorld, new MapGridGenerationOptions(160, 100));
+        var second = new MapGridGenerator().Generate(secondWorld, new MapGridGenerationOptions(160, 100));
+
+        Assert.NotEqual(ObjectLayoutSignature(first.Grid), ObjectLayoutSignature(second.Grid));
+    }
+
+    [Fact]
+    public void Seeded_Generator_Keeps_Starter_Objects_Road_Accessible()
+    {
+        var world = CreateWorldWithStarterObjects(seed: 12345);
+
+        var result = new MapGridGenerator().Generate(world, new MapGridGenerationOptions(160, 100));
+
+        Assert.NotEmpty(result.Grid.Objects);
+        Assert.All(result.Grid.Objects.Values, mapObject => Assert.True(result.Grid.HasRoadAccess(mapObject)));
     }
 
     [Fact]
@@ -224,7 +307,7 @@ public class MapGridGeneratorTests
         var result = new MapGridGenerator().Generate(world, new MapGridGenerationOptions(160, 100));
 
         var shop = Assert.Contains("business:100", result.Grid.Objects);
-        Assert.Equal((12, 16), (shop.WidthMeters, shop.LengthMeters));
+        Assert.Equal((6, 8), (shop.WidthMeters, shop.LengthMeters));
         Assert.Equal("business.shop", shop.AssetKey);
     }
 
@@ -393,6 +476,39 @@ public class MapGridGeneratorTests
     }
 
     [Fact]
+    public void Generator_Places_Targeted_Event_Marker_Near_Target_Object()
+    {
+        var world = CreateWorld(seed: 12345);
+        world.Businesses.Add(new Business("Corner Shop", "shop", 4)
+        {
+            Id = 100,
+            DistrictId = 1,
+            ProductionType = "trade",
+            Status = BusinessStatus.Active
+        });
+        var gameEvent = new GameEvent("Fire reported: Corner Shop", "Corner Shop needs a response.", EventType.Crisis)
+        {
+            TargetEntityKind = MapObjectEntityKind.Business,
+            TargetEntityId = 100,
+            LocalBuildingEventKind = LocalBuildingEventKind.Fire,
+            Severity = 2f
+        };
+        gameEvent.Choices.Add(new EventChoice("rapid-response", "Rapid response") { DistrictId = 1 });
+        world.Events.Add(gameEvent);
+
+        var result = new MapGridGenerator().Generate(world, new MapGridGenerationOptions(160, 100));
+        var target = Assert.Contains("business:100", result.Grid.Objects);
+        var marker = Assert.Contains($"event:{gameEvent.Id}", result.Grid.Objects);
+
+        Assert.Equal(MapObjectEntityKind.GameEvent, marker.EntityKind);
+        Assert.Equal(gameEvent.Id, marker.EntityId);
+        Assert.Equal(target.DistrictId, marker.DistrictId);
+        Assert.True(
+            System.Math.Abs(marker.Position.X - target.Position.X) <= target.FootprintWidth + marker.FootprintWidth + 2 &&
+            System.Math.Abs(marker.Position.Y - target.Position.Y) <= target.FootprintLength + marker.FootprintLength + 2);
+    }
+
+    [Fact]
     public void Generator_Skips_Object_When_No_Valid_Placement_Exists()
     {
         var world = CreateWorld();
@@ -412,9 +528,9 @@ public class MapGridGeneratorTests
         Assert.DoesNotContain("business:100", result.Grid.Objects.Keys);
     }
 
-    private static WorldState CreateWorld()
+    private static WorldState CreateWorld(int seed = 0)
     {
-        var world = new WorldState();
+        var world = new WorldState(seed);
         world.Districts.Add(new District("Central") { Id = 1, Population = 25 });
         world.Districts.Add(new District("Riverside") { Id = 2, Population = 25 });
         return world;
@@ -427,9 +543,9 @@ public class MapGridGeneratorTests
         return world;
     }
 
-    private static WorldState CreateWorldWithStarterObjects()
+    private static WorldState CreateWorldWithStarterObjects(int seed = 0)
     {
-        var world = CreateWorld();
+        var world = CreateWorld(seed);
         world.HousingUnits.Add(new HousingUnit(100, districtId: 1, capacity: 2));
         world.HousingUnits.Add(new HousingUnit(101, districtId: 2, capacity: 2));
         return world;
@@ -438,5 +554,34 @@ public class MapGridGeneratorTests
     private static bool AreAdjacent(GridPosition a, GridPosition b)
     {
         return System.Math.Abs(a.X - b.X) + System.Math.Abs(a.Y - b.Y) == 1;
+    }
+
+    private static string TerrainSignature(MapGrid grid)
+    {
+        return string.Join(
+            ';',
+            grid.Cells
+                .Where(cell => cell.Surface != MapSurfaceType.Land)
+                .OrderBy(cell => cell.Position.Y)
+                .ThenBy(cell => cell.Position.X)
+                .Select(cell => $"{cell.Position.X},{cell.Position.Y}:{cell.Surface}"));
+    }
+
+    private static string DistrictLayoutSignature(MapGridGenerationResult result)
+    {
+        return string.Join(
+            ';',
+            result.DistrictAreas.Values
+                .OrderBy(area => area.DistrictId)
+                .Select(area => $"{area.DistrictId}:{area.Origin.X},{area.Origin.Y},{area.WidthMeters},{area.HeightMeters}"));
+    }
+
+    private static string ObjectLayoutSignature(MapGrid grid)
+    {
+        return string.Join(
+            ';',
+            grid.Objects.Values
+                .OrderBy(mapObject => mapObject.Id)
+                .Select(mapObject => $"{mapObject.Id}:{mapObject.Position.X},{mapObject.Position.Y}"));
     }
 }

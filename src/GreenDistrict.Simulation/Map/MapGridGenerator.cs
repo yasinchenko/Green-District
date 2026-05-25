@@ -73,6 +73,8 @@ public sealed record MapGridGenerationResult(
 
 public sealed class MapGridGenerator
 {
+    private const float TargetWaterShare = 0.20f;
+
     private readonly RoadPathfinder _pathfinder = new();
     private readonly MapObjectSizeCatalog _sizeCatalog;
 
@@ -88,9 +90,9 @@ public sealed class MapGridGenerator
         options ??= new MapGridGenerationOptions();
         options.Validate();
         var grid = new MapGrid(options.WidthMeters, options.HeightMeters);
-        ApplyBaseTerrain(grid);
+        ApplyBaseTerrain(grid, world.SimulationSeed);
 
-        var areas = LayoutDistricts(world.Districts.OrderBy(district => district.Id).ToList(), options)
+        var areas = LayoutDistricts(grid, world.Districts.OrderBy(district => district.Id).ToList(), options, world.SimulationSeed)
             .ToDictionary(area => area.DistrictId);
 
         foreach (var area in areas.Values)
@@ -98,6 +100,7 @@ public sealed class MapGridGenerator
             MarkDistrictCells(grid, area);
         }
 
+        EnsureTargetWaterShare(grid, world.SimulationSeed);
         PlaceWorldObjects(grid, world, areas, options);
         BuildRegionalRoads(grid, areas.Values.OrderBy(area => area.Center.X).ThenBy(area => area.Center.Y).ToList(), options);
 
@@ -109,11 +112,25 @@ public sealed class MapGridGenerator
         return new MapGridGenerationResult(grid, areas, MapFreeSpaceIndex.Build(grid), boundaries, expansionSpaces);
     }
 
-    private static void ApplyBaseTerrain(MapGrid grid)
+    private static void ApplyBaseTerrain(MapGrid grid, int seed)
     {
-        var startY = Math.Max(2, (int)MathF.Round(grid.HeightMeters * 0.15f));
-        var endY = Math.Min(grid.HeightMeters - 3, (int)MathF.Round(grid.HeightMeters * 0.90f));
+        var terrainSeed = seed == 0 ? 17_231 : StableHash(seed, 17_231, 73);
+        var startY = Math.Max(1, (int)MathF.Round(grid.HeightMeters * StableRange(terrainSeed, 11, 0.04f, 0.12f)));
+        var endY = Math.Min(grid.HeightMeters - 2, (int)MathF.Round(grid.HeightMeters * StableRange(terrainSeed, 23, 0.88f, 0.98f)));
         if (endY <= startY) return;
+
+        var centerRatio = StableRange(terrainSeed, 37, 0.66f, 0.84f);
+        var primaryPhase = StableRange(terrainSeed, 41, 0f, MathF.PI * 2f);
+        var secondaryPhase = StableRange(terrainSeed, 43, 0f, MathF.PI * 2f);
+        var widthPhase = StableRange(terrainSeed, 47, 0f, MathF.PI * 2f);
+        var riverLean = StableRange(terrainSeed, 53, -0.10f, 0.10f);
+        var waterTarget = Math.Clamp(
+            (int)MathF.Round(grid.WidthMeters * grid.HeightMeters * TargetWaterShare),
+            1,
+            grid.WidthMeters * grid.HeightMeters);
+        var riverLength = Math.Max(1, endY - startY + 1);
+        var targetHalfWidth = Math.Max(8f, waterTarget / (riverLength * 2f));
+        var candidates = new List<(GridPosition Position, float Score)>(grid.WidthMeters * riverLength);
 
         for (var y = 0; y < grid.HeightMeters; y++)
         {
@@ -121,48 +138,71 @@ public sealed class MapGridGenerator
 
             var t = (y - startY) / (float)Math.Max(1, endY - startY);
             var taper = MathF.Sin(MathF.PI * t);
-            var rowNoise = StableTerrainNoise(y, 0) - 0.5f;
-            var center = grid.WidthMeters * 0.82f
-                + MathF.Sin(t * MathF.PI * 2.2f + 0.35f) * grid.WidthMeters * 0.035f
-                + MathF.Sin(t * MathF.PI * 5.1f + 1.2f) * grid.WidthMeters * 0.014f
+            var rowNoise = StableTerrainNoise(terrainSeed, y, 0) - 0.5f;
+            var center = grid.WidthMeters * (centerRatio + (t - 0.5f) * riverLean)
+                + MathF.Sin(t * MathF.PI * 2.2f + primaryPhase) * grid.WidthMeters * 0.075f
+                + MathF.Sin(t * MathF.PI * 5.1f + secondaryPhase) * grid.WidthMeters * 0.035f
                 + rowNoise * grid.WidthMeters * 0.018f;
-            var baseHalfWidth = Math.Max(10f, grid.WidthMeters * 0.058f);
-            var halfWidth = baseHalfWidth * (0.34f + taper * 0.86f)
-                + MathF.Sin(t * MathF.PI * 7.0f + 0.8f) * grid.WidthMeters * 0.012f
+            var halfWidth = targetHalfWidth * (0.62f + taper * 0.76f)
+                + MathF.Sin(t * MathF.PI * 7.0f + widthPhase) * grid.WidthMeters * 0.018f
                 + rowNoise * grid.WidthMeters * 0.011f;
-            var leftBank = (int)MathF.Floor(center - halfWidth);
-            var rightBank = (int)MathF.Ceiling(center + halfWidth);
 
             for (var x = 0; x < grid.WidthMeters; x++)
             {
-                var bankNoise = StableTerrainNoise(x, y) - 0.5f;
-                var localLeft = leftBank + (int)MathF.Round(bankNoise * 3f);
-                var localRight = rightBank + (int)MathF.Round((StableTerrainNoise(x + 31, y + 17) - 0.5f) * 3f);
-                if (x >= localLeft && x <= localRight)
-                {
-                    grid.SetSurface(new GridPosition(x, y), MapSurfaceType.Water);
-                }
+                var bankNoise = StableTerrainNoise(terrainSeed, x, y) - 0.5f;
+                var widthNoise = StableTerrainNoise(terrainSeed, x + 31, y + 17) - 0.5f;
+                var distance = MathF.Abs(x - center) / Math.Max(1f, halfWidth);
+                var score = distance + bankNoise * 0.30f + widthNoise * 0.18f;
+                candidates.Add((new GridPosition(x, y), score));
             }
+        }
+
+        foreach (var candidate in candidates
+            .OrderBy(candidate => candidate.Score)
+            .ThenBy(candidate => StableHash(terrainSeed, candidate.Position.X, candidate.Position.Y))
+            .Take(waterTarget))
+        {
+            grid.SetSurface(candidate.Position, MapSurfaceType.Water);
         }
     }
 
-    private static float StableTerrainNoise(int x, int y)
+    private static float StableTerrainNoise(int seed, int x, int y)
     {
-        return StableHash(17_231, x, y) / (float)int.MaxValue;
+        return StableHash(seed, x, y) / (float)int.MaxValue;
+    }
+
+    private static float StableRange(int seed, int salt, float min, float max)
+    {
+        return min + (max - min) * StableTerrainNoise(seed, salt, seed ^ salt);
     }
 
     private static IReadOnlyList<MapDistrictGridArea> LayoutDistricts(
+        MapGrid grid,
+        IReadOnlyList<District> districts,
+        MapGridGenerationOptions options,
+        int seed)
+    {
+        if (districts.Count == 0) return Array.Empty<MapDistrictGridArea>();
+        if (seed != 0)
+        {
+            var seeded = TryLayoutDistrictsFromSeed(grid, districts, options, seed);
+            if (seeded != null) return seeded;
+        }
+
+        return LayoutDistrictsRegular(districts, options);
+    }
+
+    private static IReadOnlyList<MapDistrictGridArea> LayoutDistrictsRegular(
         IReadOnlyList<District> districts,
         MapGridGenerationOptions options)
     {
-        if (districts.Count == 0) return Array.Empty<MapDistrictGridArea>();
-
         var columns = Math.Max(1, (int)Math.Ceiling(Math.Sqrt(districts.Count)));
         var rows = Math.Max(1, (int)Math.Ceiling(districts.Count / (float)columns));
-        var availableWidth = options.WidthMeters - options.PaddingMeters * 2 - options.DistrictGapMeters * (columns - 1);
-        var availableHeight = options.HeightMeters - options.PaddingMeters * 2 - options.DistrictGapMeters * (rows - 1);
-        var cellWidth = Math.Max(24, availableWidth / columns);
-        var cellHeight = Math.Max(24, availableHeight / rows);
+        var (cellWidth, cellHeight) = CalculateDistrictAreaSize(districts.Count, options);
+        var availableWidth = options.WidthMeters - options.PaddingMeters * 2;
+        var availableHeight = options.HeightMeters - options.PaddingMeters * 2;
+        var strideX = columns <= 1 ? 0 : (availableWidth - cellWidth) / (columns - 1);
+        var strideY = rows <= 1 ? 0 : (availableHeight - cellHeight) / (rows - 1);
 
         var result = new List<MapDistrictGridArea>();
         for (var i = 0; i < districts.Count; i++)
@@ -170,13 +210,104 @@ public sealed class MapGridGenerator
             var column = i % columns;
             var row = i / columns;
             var origin = new GridPosition(
-                options.PaddingMeters + column * (cellWidth + options.DistrictGapMeters),
-                options.PaddingMeters + row * (cellHeight + options.DistrictGapMeters));
+                options.PaddingMeters + column * Math.Max(cellWidth + options.DistrictGapMeters, strideX),
+                options.PaddingMeters + row * Math.Max(cellHeight + options.DistrictGapMeters, strideY));
 
             result.Add(new MapDistrictGridArea(districts[i].Id, districts[i].Name, origin, cellWidth, cellHeight));
         }
 
         return result;
+    }
+
+    private static IReadOnlyList<MapDistrictGridArea>? TryLayoutDistrictsFromSeed(
+        MapGrid grid,
+        IReadOnlyList<District> districts,
+        MapGridGenerationOptions options,
+        int seed)
+    {
+        var (areaWidth, areaHeight) = CalculateDistrictAreaSize(districts.Count, options);
+        var maxX = grid.WidthMeters - areaWidth - options.PaddingMeters;
+        var maxY = grid.HeightMeters - areaHeight - options.PaddingMeters;
+        if (maxX < options.PaddingMeters || maxY < options.PaddingMeters) return null;
+
+        var layoutSeed = StableHash(seed, 29_711, districts.Count);
+        var step = Math.Max(4, Math.Min(areaWidth, areaHeight) / 6);
+        var candidateLists = districts
+            .Select(district => CandidateDistrictAreas(district, areaWidth, areaHeight, options, maxX, maxY, step)
+                .OrderBy(area => StableHash(layoutSeed, area.Origin.X + district.Id * 101, area.Origin.Y + district.Id * 503))
+                .Take(80)
+                .ToList())
+            .ToList();
+
+        if (candidateLists.Any(candidates => candidates.Count == 0)) return null;
+
+        var selected = new List<MapDistrictGridArea>();
+        return TrySelectDistrictAreas(candidateLists, 0, options.DistrictGapMeters, selected)
+            ? selected
+            : null;
+    }
+
+    private static (int Width, int Height) CalculateDistrictAreaSize(int districtCount, MapGridGenerationOptions options)
+    {
+        var columns = Math.Max(1, (int)Math.Ceiling(Math.Sqrt(districtCount)));
+        var rows = Math.Max(1, (int)Math.Ceiling(districtCount / (float)columns));
+        var availableWidth = options.WidthMeters - options.PaddingMeters * 2 - options.DistrictGapMeters * (columns - 1);
+        var availableHeight = options.HeightMeters - options.PaddingMeters * 2 - options.DistrictGapMeters * (rows - 1);
+        var width = Math.Max(42, (int)MathF.Floor(availableWidth / (columns * 1.35f)));
+        var height = Math.Max(42, (int)MathF.Floor(availableHeight / (rows * 1.20f)));
+        return (Math.Min(availableWidth, width), Math.Min(availableHeight, height));
+    }
+
+    private static IEnumerable<MapDistrictGridArea> CandidateDistrictAreas(
+        District district,
+        int widthMeters,
+        int heightMeters,
+        MapGridGenerationOptions options,
+        int maxX,
+        int maxY,
+        int stepMeters)
+    {
+        for (var y = options.PaddingMeters; y <= maxY; y += stepMeters)
+        {
+            for (var x = options.PaddingMeters; x <= maxX; x += stepMeters)
+            {
+                yield return new MapDistrictGridArea(district.Id, district.Name, new GridPosition(x, y), widthMeters, heightMeters);
+            }
+        }
+
+        yield return new MapDistrictGridArea(district.Id, district.Name, new GridPosition(maxX, maxY), widthMeters, heightMeters);
+    }
+
+    private static bool DistrictAreasIntersectWithGap(MapDistrictGridArea first, MapDistrictGridArea second, int gapMeters)
+    {
+        return first.MinX - gapMeters <= second.MaxX &&
+            first.MaxX + gapMeters >= second.MinX &&
+            first.MinY - gapMeters <= second.MaxY &&
+            first.MaxY + gapMeters >= second.MinY;
+    }
+
+    private static bool TrySelectDistrictAreas(
+        IReadOnlyList<IReadOnlyList<MapDistrictGridArea>> candidateLists,
+        int index,
+        int gapMeters,
+        List<MapDistrictGridArea> selected)
+    {
+        if (index >= candidateLists.Count) return true;
+
+        foreach (var candidate in candidateLists[index])
+        {
+            if (selected.Any(existing => DistrictAreasIntersectWithGap(existing, candidate, gapMeters))) continue;
+
+            selected.Add(candidate);
+            if (TrySelectDistrictAreas(candidateLists, index + 1, gapMeters, selected))
+            {
+                return true;
+            }
+
+            selected.RemoveAt(selected.Count - 1);
+        }
+
+        return false;
     }
 
     private static void MarkDistrictCells(MapGrid grid, MapDistrictGridArea area)
@@ -188,8 +319,49 @@ public sealed class MapGridGenerator
                 var position = new GridPosition(x, y);
                 if (!grid.TryGetCell(position, out var cell) || cell == null) continue;
                 cell.DistrictId = area.DistrictId;
+                if (cell.IsWater)
+                {
+                    grid.SetSurface(position, MapSurfaceType.Land);
+                }
             }
         }
+    }
+
+    private static void EnsureTargetWaterShare(MapGrid grid, int seed)
+    {
+        var target = Math.Clamp(
+            (int)MathF.Round(grid.WidthMeters * grid.HeightMeters * TargetWaterShare),
+            1,
+            grid.WidthMeters * grid.HeightMeters);
+        var current = grid.Cells.Count(cell => cell.Surface == MapSurfaceType.Water);
+        if (current >= target) return;
+
+        var terrainSeed = seed == 0 ? 17_231 : StableHash(seed, 17_231, 73);
+        var candidates = grid.Cells
+            .Where(cell => !cell.DistrictId.HasValue && cell.Surface == MapSurfaceType.Land)
+            .Select(cell => new
+            {
+                cell.Position,
+                Score = (HasAdjacentWater(grid, cell.Position) ? 0f : 0.65f) +
+                    StableTerrainNoise(terrainSeed, cell.Position.X + 97, cell.Position.Y + 193) * 0.35f
+            })
+            .OrderBy(candidate => candidate.Score)
+            .ThenBy(candidate => StableHash(terrainSeed, candidate.Position.X, candidate.Position.Y))
+            .Take(target - current)
+            .ToList();
+
+        foreach (var candidate in candidates)
+        {
+            grid.SetSurface(candidate.Position, MapSurfaceType.Water);
+        }
+    }
+
+    private static bool HasAdjacentWater(MapGrid grid, GridPosition position)
+    {
+        return grid.TryGetCell(position.Offset(0, -1), out var north) && north is { IsWater: true } ||
+            grid.TryGetCell(position.Offset(1, 0), out var east) && east is { IsWater: true } ||
+            grid.TryGetCell(position.Offset(0, 1), out var south) && south is { IsWater: true } ||
+            grid.TryGetCell(position.Offset(-1, 0), out var west) && west is { IsWater: true };
     }
 
     private void BuildRegionalRoads(
@@ -211,6 +383,7 @@ public sealed class MapGridGenerator
         IReadOnlyDictionary<int, MapDistrictGridArea> areas,
         MapGridGenerationOptions options)
     {
+        var worldSeed = world.SimulationSeed;
         foreach (var business in world.Businesses
             .Where(business => business.Status == BusinessStatus.Active && business.DistrictId.HasValue)
             .OrderBy(business => business.Id))
@@ -225,7 +398,7 @@ public sealed class MapGridGenerator
                 area.Origin,
                 MapObjectEntityKind.Business,
                 business.Id);
-            TryPlaceAccessibleObject(grid, mapObject, area, options, business.Id * 41);
+            TryPlaceAccessibleObject(grid, mapObject, area, options, StableHash(worldSeed, business.Id, 41));
         }
 
         foreach (var housing in world.HousingUnits
@@ -242,7 +415,7 @@ public sealed class MapGridGenerator
                 area.Origin,
                 MapObjectEntityKind.HousingUnit,
                 housing.Id);
-            TryPlaceAccessibleObject(grid, mapObject, area, options, housing.Id * 53);
+            TryPlaceAccessibleObject(grid, mapObject, area, options, StableHash(worldSeed, housing.Id, 53));
         }
 
         foreach (var project in world.Projects
@@ -259,13 +432,19 @@ public sealed class MapGridGenerator
                 area.Origin,
                 MapObjectEntityKind.GovernmentProject,
                 project.Id);
-            TryPlaceAccessibleObject(grid, mapObject, area, options, project.Id * 67);
+            TryPlaceAccessibleObject(grid, mapObject, area, options, StableHash(worldSeed, project.Id, 67));
         }
 
         foreach (var gameEvent in world.Events
             .Where(gameEvent => !gameEvent.IsResolved)
             .OrderBy(gameEvent => gameEvent.Id))
         {
+            if (gameEvent.HasTargetEntity &&
+                TryPlaceTargetedEventMarker(grid, gameEvent, worldSeed, areas))
+            {
+                continue;
+            }
+
             var districtId = EventDistrictId(gameEvent);
             if (!districtId.HasValue || !areas.TryGetValue(districtId.Value, out var area)) continue;
 
@@ -276,7 +455,7 @@ public sealed class MapGridGenerator
                 area.Origin,
                 MapObjectEntityKind.GameEvent,
                 gameEvent.Id);
-            TryPlaceMarkerObject(grid, mapObject, area, gameEvent.Id * 79);
+            TryPlaceMarkerObject(grid, mapObject, area, StableHash(worldSeed, gameEvent.Id, 79));
         }
     }
 
@@ -345,6 +524,67 @@ public sealed class MapGridGenerator
         }
 
         return false;
+    }
+
+    private bool TryPlaceTargetedEventMarker(
+        MapGrid grid,
+        GameEvent gameEvent,
+        int worldSeed,
+        IReadOnlyDictionary<int, MapDistrictGridArea> areas)
+    {
+        if (!gameEvent.TargetEntityId.HasValue) return false;
+
+        var target = grid.Objects.Values.FirstOrDefault(mapObject =>
+            mapObject.EntityKind == gameEvent.TargetEntityKind &&
+            mapObject.EntityId == gameEvent.TargetEntityId);
+        if (target == null || !target.DistrictId.HasValue) return false;
+        if (!areas.TryGetValue(target.DistrictId.Value, out var area)) return false;
+
+        var marker = CreateObject(
+            $"event:{gameEvent.Id}",
+            EventObjectKey(gameEvent.Type),
+            area.DistrictId,
+            target.Position,
+            MapObjectEntityKind.GameEvent,
+            gameEvent.Id);
+
+        foreach (var candidate in CandidateMarkerPlacementsNearObject(marker, target, area)
+            .OrderBy(candidate => StableHash(worldSeed, gameEvent.Id, candidate.Position.X, candidate.Position.Y)))
+        {
+            if (grid.TryPlaceObject(candidate))
+            {
+                return true;
+            }
+        }
+
+        return TryPlaceMarkerObject(grid, marker, area, StableHash(worldSeed, gameEvent.Id, 89));
+    }
+
+    private static IEnumerable<PlacedMapObject> CandidateMarkerPlacementsNearObject(
+        PlacedMapObject marker,
+        PlacedMapObject target,
+        MapDistrictGridArea area)
+    {
+        var offsets = new[]
+        {
+            new GridPosition(target.Position.X + target.FootprintWidth, target.Position.Y),
+            new GridPosition(target.Position.X - marker.FootprintWidth, target.Position.Y),
+            new GridPosition(target.Position.X, target.Position.Y + target.FootprintLength),
+            new GridPosition(target.Position.X, target.Position.Y - marker.FootprintLength),
+            new GridPosition(target.Position.X + target.FootprintWidth, target.Position.Y + target.FootprintLength),
+            new GridPosition(target.Position.X - marker.FootprintWidth, target.Position.Y - marker.FootprintLength)
+        };
+
+        foreach (var position in offsets)
+        {
+            if (!area.Contains(position) ||
+                !area.Contains(position.Offset(marker.FootprintWidth - 1, marker.FootprintLength - 1)))
+            {
+                continue;
+            }
+
+            yield return marker.PlaceAt(position, accessSides: MapAccessSide.None);
+        }
     }
 
     private IEnumerable<PlacedMapObject> CandidateObjectPlacements(
@@ -614,6 +854,11 @@ public sealed class MapGridGenerator
             value = value * 397 ^ y;
             return value & 0x7fffffff;
         }
+    }
+
+    private static int StableHash(int seed, int x, int y, int z)
+    {
+        return StableHash(StableHash(seed, x, y), z, 97);
     }
 
     private static string BusinessObjectKey(Business business)

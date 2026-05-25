@@ -1,6 +1,7 @@
 using System.IO;
 using System.Linq;
 using GreenDistrict.Simulation.Core;
+using GreenDistrict.Simulation.Map;
 using GreenDistrict.Simulation.Persistence;
 using Xunit;
 
@@ -78,7 +79,13 @@ public class PersistenceTests
         world.LastLocalGovernmentSpending = 111f;
         world.LastExternalGovernmentSpending = 222f;
 
-        var gameEvent = new GameEvent("Crisis", "Choose response.", EventType.Decision);
+        var gameEvent = new GameEvent("Crisis", "Choose response.", EventType.Decision)
+        {
+            TargetEntityKind = MapObjectEntityKind.Business,
+            TargetEntityId = business.Id,
+            LocalBuildingEventKind = LocalBuildingEventKind.Fire,
+            Severity = 2f
+        };
         gameEvent.Choices.Add(new EventChoice("fund", "Fund response") { BudgetEffect = -100f, DistrictId = 7 });
         world.Events.Add(gameEvent);
 
@@ -134,6 +141,10 @@ public class PersistenceTests
         Assert.Equal(project.ExternalCostPaid, loadedProject.ExternalCostPaid);
         Assert.False(loadedProject.Completed);
         Assert.True(loadedEvent.HasChoices);
+        Assert.Equal(MapObjectEntityKind.Business, loadedEvent.TargetEntityKind);
+        Assert.Equal(business.Id, loadedEvent.TargetEntityId);
+        Assert.Equal(LocalBuildingEventKind.Fire, loadedEvent.LocalBuildingEventKind);
+        Assert.Equal(2f, loadedEvent.Severity);
         Assert.Equal("fund", loadedEvent.Choices[0].Id);
     }
 
